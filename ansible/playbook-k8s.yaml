@@ -66,12 +66,11 @@
           sysctl --system
 
     # ============================================================
-    # Установка containerd (вместо Docker + cri-dockerd)
+    # Установка containerd
     # ============================================================
     - name: Install containerd
       ansible.builtin.apt:
-        name:
-          - containerd
+        name: containerd
         state: present
 
     - name: Create containerd config directory
@@ -94,11 +93,18 @@
         regexp: 'SystemdCgroup = false'
         replace: 'SystemdCgroup = true'
 
-    - name: Restart containerd
-      ansible.builtin.service:
+    - name: Restart containerd and enable
+      ansible.builtin.systemd:
         name: containerd
         state: restarted
         enabled: yes
+        daemon_reload: yes
+
+    - name: Wait for containerd socket
+      ansible.builtin.wait_for:
+        path: /run/containerd/containerd.sock
+        state: present
+        timeout: 30
 
     # ============================================================
     # Установка kubeadm, kubelet, kubectl
@@ -131,6 +137,10 @@
         cmd: |
           kubeadm init --pod-network-cidr={{ pod_network_cidr }} --service-cidr={{ service_cidr }} --cri-socket unix:///run/containerd/containerd.sock
         creates: /etc/kubernetes/admin.conf
+      register: init_result
+      until: init_result.rc == 0
+      retries: 3
+      delay: 10
 
     - name: Create .kube directory for root
       ansible.builtin.file:
