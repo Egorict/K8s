@@ -1,0 +1,31 @@
+replicaCount: 3
+image:
+  repository: ermakov880/devops-project
+  tag: latest
+  pullPolicy: Always
+service:
+  type: NodePort
+  port: 80
+  nodePort: 30080   # порт, по которому будет доступно приложение
+# Ingress отключён – используем NodePort
+ingress:
+  enabled: false
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+livenessProbe:
+  enabled: true
+  path: /
+  port: 80
+  initialDelaySeconds: 30
+  periodSeconds: 10
+readinessProbe:
+  enabled: true
+  path: /
+  port: 80
+  initialDelaySeconds: 5
+  periodSeconds: 5
