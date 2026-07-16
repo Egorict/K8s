@@ -1,26 +1,10 @@
----
 - name: Delete all ArgoCD resources (including global)
   shell: |
-    # Удаляем все ресурсы из манифеста установки
     kubectl delete -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml --ignore-not-found=true 2>/dev/null || true
-    sleep 3
-
-    # Удаляем неймспейс argocd
     kubectl delete namespace argocd --ignore-not-found=true 2>/dev/null || true
-    sleep 3
-
-    # Удаляем CRDs
     kubectl delete crd applications.argoproj.io appprojects.argoproj.io --ignore-not-found=true 2>/dev/null || true
-    sleep 3
-
-    # Удаляем все ClusterRole и ClusterRoleBinding, связанные с ArgoCD
     kubectl delete clusterrole argocd-application-controller argocd-applicationset-controller argocd-server argocd-redis argocd-repo-server argocd-dex-server argocd-notifications-controller --ignore-not-found=true 2>/dev/null || true
     kubectl delete clusterrolebinding argocd-application-controller argocd-applicationset-controller argocd-server --ignore-not-found=true 2>/dev/null || true
-
-    # Удаляем ServiceAccount в других неймспейсах (если есть)
-    kubectl delete sa argocd-application-controller argocd-applicationset-controller argocd-dex-server argocd-redis argocd-repo-server argocd-server argocd-notifications-controller -n argocd --ignore-not-found=true 2>/dev/null || true
-
-    # Ждём, чтобы удаление завершилось
     sleep 5
   changed_when: false
 
@@ -35,14 +19,15 @@
       --namespace argocd --create-namespace \
       --set server.service.type=NodePort \
       --set server.service.nodePortHttp=30080 \
-      --set server.service.nodePortHttps=30443
+      --set server.service.nodePortHttps=30443 \
+      --wait
   register: argocd_install
   until: argocd_install.rc == 0
   retries: 3
   delay: 10
 
-- name: Wait for ArgoCD server pod
-  shell: kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
+- name: Wait for all ArgoCD pods
+  shell: kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s
   retries: 10
   delay: 10
   register: argocd_wait
@@ -60,3 +45,4 @@
 - name: Apply ArgoCD Application
   shell: kubectl apply -f https://raw.githubusercontent.com/Egorict/K8s/main/k8s/argocd/application.yaml
   ignore_errors: yes
+  when: argocd_wait.rc == 0
