@@ -1,5 +1,5 @@
 ---
-- name: Install Kubernetes cluster (kubeadm) with ArgoCD and monitoring
+- name: Install Kubernetes cluster (kubeadm) with containerd, ArgoCD and monitoring
   hosts: all
   become: yes
   vars:
@@ -8,7 +8,7 @@
     service_cidr: "10.96.0.0/12"
     helm_version: "v3.12.0"
     argocd_version: "stable"
-    repo_url: "https://github.com/Egorict/DevopsProject.git"
+    repo_url: "https://github.com/Egorict/K8s.git"
     app_path: "k8s/base/myapp-chart"
     prometheus_stack_version: "56.0.0"
     loki_stack_version: "2.9.0"
@@ -65,39 +65,44 @@
           EOF
           sysctl --system
 
-    - name: Install Docker
+    # ============================================================
+    # Установка containerd (вместо Docker + cri-dockerd)
+    # ============================================================
+    - name: Install containerd
+      ansible.builtin.apt:
+        name:
+          - containerd
+        state: present
+
+    - name: Create containerd config directory
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Generate default containerd config
       ansible.builtin.shell:
-        cmd: |
-          curl -fsSL https://get.docker.com -o get-docker.sh
-          sh get-docker.sh
+        cmd: containerd config default > /etc/containerd/config.toml
       args:
-        creates: /usr/bin/docker
+        creates: /etc/containerd/config.toml
 
-    - name: Install cri-dockerd
-      ansible.builtin.shell:
-        cmd: |
-          VER=$(curl -s https://api.github.com/repos/Mirantis/cri-dockerd/releases/latest|grep tag_name|cut -d '"' -f 4)
-          wget https://github.com/Mirantis/cri-dockerd/releases/download/$VER/cri-dockerd-${VER}.linux-amd64.tgz
-          tar xvf cri-dockerd-${VER}.linux-amd64.tgz
-          sudo mv cri-dockerd /usr/local/bin/
-        creates: /usr/local/bin/cri-dockerd
+    - name: Set systemd cgroup driver for containerd
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
 
-    - name: Create cri-dockerd service
-      ansible.builtin.shell:
-        cmd: |
-          cat <<EOF | tee /etc/systemd/system/cri-docker.service
-          [Unit]
-          Description=CRI Docker
-          After=network.target docker.service
-          [Service]
-          ExecStart=/usr/local/bin/cri-dockerd --network-plugin=cni --pod-infra-container-image=registry.k8s.io/pause:3.9
-          Restart=always
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-          systemctl daemon-reload
-          systemctl enable --now cri-docker
+    - name: Restart containerd
+      ansible.builtin.service:
+        name: containerd
+        state: restarted
+        enabled: yes
 
+    # ============================================================
+    # Установка kubeadm, kubelet, kubectl
+    # ============================================================
     - name: Add Kubernetes apt repo
       ansible.builtin.shell:
         cmd: |
@@ -114,11 +119,26 @@
         state: present
         update_cache: yes
 
+    - name: Hold Kubernetes packages
+      ansible.builtin.shell:
+        cmd: apt-mark hold kubeadm kubelet kubectl
+
+    # ============================================================
+    # Инициализация кластера с containerd
+    # ============================================================
     - name: Initialize Kubernetes cluster
       ansible.builtin.shell:
         cmd: |
-          kubeadm init --pod-network-cidr={{ pod_network_cidr }} --service-cidr={{ service_cidr }} --cri-socket unix:///var/run/cri-dockerd.sock
+          kubeadm init --pod-network-cidr={{ pod_network_cidr }} --service-cidr={{ service_cidr }} --cri-socket unix:///run/containerd/containerd.sock
         creates: /etc/kubernetes/admin.conf
+
+    - name: Create .kube directory for root
+      ansible.builtin.file:
+        path: /root/.kube
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
 
     - name: Copy admin.conf to root
       ansible.builtin.copy:
@@ -129,15 +149,31 @@
         group: root
         mode: '0600'
 
+    - name: Set KUBECONFIG environment variable
+      ansible.builtin.lineinfile:
+        path: /root/.bashrc
+        line: 'export KUBECONFIG=/root/.kube/config'
+        create: yes
+
+    # ============================================================
+    # Установка Pod Network (Flannel)
+    # ============================================================
     - name: Install Flannel CNI
       ansible.builtin.shell:
         cmd: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+      register: flannel
+      until: flannel.rc == 0
+      retries: 5
+      delay: 10
 
-    - name: Allow pods on control plane
+    - name: Allow pods on control plane (single-node cluster)
       ansible.builtin.shell:
         cmd: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
       ignore_errors: yes
 
+    # ============================================================
+    # Установка Helm
+    # ============================================================
     - name: Install Helm
       ansible.builtin.shell:
         cmd: |
@@ -147,13 +183,53 @@
       args:
         creates: /usr/local/bin/helm
 
+    # ============================================================
+    # Установка ArgoCD
+    # ============================================================
+    - name: Create argocd namespace
+      kubernetes.core.k8s:
+        name: argocd
+        api_version: v1
+        kind: Namespace
+        state: present
+
     - name: Install ArgoCD
       kubernetes.core.k8s:
         state: present
         src: https://raw.githubusercontent.com/argoproj/argo-cd/{{ argocd_version }}/manifests/install.yaml
         namespace: argocd
 
-    - name: Install Prometheus + Grafana
+    - name: Wait for ArgoCD pods
+      ansible.builtin.shell:
+        cmd: kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
+      register: argocd_wait
+      retries: 10
+      delay: 10
+      until: argocd_wait.rc == 0
+
+    - name: Get ArgoCD admin password
+      ansible.builtin.shell:
+        cmd: |
+          kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+      register: argocd_password
+      changed_when: false
+
+    - name: Display ArgoCD info
+      ansible.builtin.debug:
+        msg: |
+          ✅ ArgoCD installed!
+          🔗 UI (port-forward): kubectl port-forward svc/argocd-server -n argocd 8080:443
+          🔑 Admin password: {{ argocd_password.stdout }}
+
+    # ============================================================
+    # Установка Prometheus + Grafana
+    # ============================================================
+    - name: Add prometheus-community repo
+      kubernetes.core.helm_repository:
+        name: prometheus-community
+        repo_url: https://prometheus-community.github.io/helm-charts
+
+    - name: Deploy kube-prometheus-stack
       kubernetes.core.helm:
         name: prometheus
         chart_ref: prometheus-community/kube-prometheus-stack
@@ -178,7 +254,15 @@
                   memory: 256Mi
                   cpu: 200m
 
-    - name: Install Loki + Promtail
+    # ============================================================
+    # Установка Loki + Promtail (опционально)
+    # ============================================================
+    - name: Add grafana repo
+      kubernetes.core.helm_repository:
+        name: grafana
+        repo_url: https://grafana.github.io/helm-charts
+
+    - name: Deploy Loki stack
       kubernetes.core.helm:
         name: loki
         chart_ref: grafana/loki-stack
@@ -201,8 +285,19 @@
                 memory: 128Mi
                 cpu: 100m
 
+    # ============================================================
+    # Применение ArgoCD Application (GitOps)
+    # ============================================================
     - name: Apply ArgoCD Application
       kubernetes.core.k8s:
         state: present
-        src: https://raw.githubusercontent.com/Egorict/DevopsProject/main/k8s/argocd/application.yaml
+        src: https://raw.githubusercontent.com/Egorict/K8s/main/k8s/argocd/application.yaml
       ignore_errors: yes
+
+    - name: Final status
+      ansible.builtin.debug:
+        msg: |
+          🎉 ALL DONE!
+          📦 Application synced from Git: {{ repo_url }}
+          🌐 Доступ к приложению: http://{{ ansible_default_ipv4.address }}:{{ nodeport }}
+          📊 Grafana: http://{{ ansible_default_ipv4.address }}:30300 (admin/admin)
