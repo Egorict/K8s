@@ -44,13 +44,16 @@ jobs:
             ansible-galaxy collection install kubernetes.core -f
 
             # Клонировать репозиторий (если нет) или обновить
-            if [ ! -d "DevopsProject" ]; then
-              git clone https://github.com/Egorict/K8s.git
+            if [ ! -d "K8s" ]; then                      # <-- ИСПРАВЛЕНО: папка теперь K8s
+              git clone https://github.com/Egorict/K8s.git K8s
             fi
-            cd DevopsProject
+            cd K8s                                        # <-- ИСПРАВЛЕНО: переход в папку K8s
             git pull origin master
+
+            # Диагностика: посмотреть, что в папке ansible/
             ls -la ansible/
             pwd
+
             # Запустить плейбук для установки K8s, ArgoCD, мониторинга
             ansible-playbook ansible/playbook-k8s.yaml -c local -i localhost,
 
