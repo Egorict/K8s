@@ -204,5 +204,5 @@
     - name: Apply ArgoCD Application
       kubernetes.core.k8s:
         state: present
-        src: "{{ repo_url }}/raw/master/{{ app_path }}/application.yaml"
+        src: https://raw.githubusercontent.com/Egorict/DevopsProject/main/k8s/argocd/application.yaml
       ignore_errors: yes
