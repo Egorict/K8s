@@ -45,7 +45,7 @@ jobs:
 
             # Клонировать репозиторий (если нет) или обновить
             if [ ! -d "DevopsProject" ]; then
-              git clone https://github.com/Egorict/DevopsProject.git
+              git clone https://github.com/Egorict/K8s.git
             fi
             cd DevopsProject
             git pull origin master
