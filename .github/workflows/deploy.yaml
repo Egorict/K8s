@@ -30,7 +30,7 @@ jobs:
             fi
             cd K8s
             git pull origin master
-            ansible-playbook ansible/playbook-k8s.yaml -c local -i localhost,
+            ansible-playbook ansible/playbook.yaml -c local -i localhost,
 
   # 2. Сборка образа и обновление Helm-чарта
   build:
