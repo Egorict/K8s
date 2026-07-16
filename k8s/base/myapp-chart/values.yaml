@@ -6,7 +6,7 @@ image:
 service:
   type: NodePort
   port: 80
-  nodePort: 30080   # порт, по которому будет доступно приложение
+  nodePort: 30081   # порт, по которому будет доступно приложение
 # Ingress отключён – используем NodePort
 ingress:
   enabled: false
