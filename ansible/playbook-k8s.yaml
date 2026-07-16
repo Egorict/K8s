@@ -128,6 +128,12 @@
         creates: /usr/local/bin/helm
 
     # ArgoCD (установка через Helm)
+    - name: Remove old ArgoCD namespace if exists
+      shell: |
+        kubectl delete namespace argocd --ignore-not-found=true
+        sleep 5
+      changed_when: false
+
     - name: Add ArgoCD Helm repo
       shell: |
         helm repo add argo https://argoproj.github.io/argo-helm
