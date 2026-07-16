@@ -1,157 +1,71 @@
 ---
-- name: Install Kubernetes cluster (kubeadm) with containerd, ArgoCD and monitoring
+- name: Minimal Kubernetes setup with kubeadm + containerd + ArgoCD
   hosts: all
   become: yes
   vars:
     kubernetes_version: "1.28"
     pod_network_cidr: "10.244.0.0/16"
-    service_cidr: "10.96.0.0/12"
-    helm_version: "v3.12.0"
-    argocd_version: "stable"
-    repo_url: "https://github.com/Egorict/K8s.git"
-    app_path: "k8s/base/myapp-chart"
-    prometheus_stack_version: "56.0.0"
-    loki_stack_version: "2.9.0"
-    nodeport: 30080
 
   tasks:
-    - name: Update apt cache
-      ansible.builtin.apt:
-        update_cache: yes
-        cache_valid_time: 3600
-
-    - name: Install required packages
-      ansible.builtin.apt:
-        name:
-          - curl
-          - wget
-          - git
-          - jq
-          - net-tools
-          - apt-transport-https
-          - ca-certificates
-          - gnupg
-          - lsb-release
-        state: present
-
+    # Подготовка системы
     - name: Disable swap
-      ansible.builtin.command:
-        cmd: swapoff -a
-      changed_when: false
-
+      command: swapoff -a
     - name: Remove swap from fstab
-      ansible.builtin.replace:
+      replace:
         path: /etc/fstab
         regexp: '^.*swap.*$'
         replace: ''
-
     - name: Load kernel modules
-      ansible.builtin.shell:
-        cmd: |
-          cat <<EOF | tee /etc/modules-load.d/k8s.conf
-          overlay
-          br_netfilter
-          EOF
-          modprobe overlay
-          modprobe br_netfilter
-
+      shell: |
+        modprobe overlay
+        modprobe br_netfilter
     - name: Set sysctl params
-      ansible.builtin.shell:
-        cmd: |
-          cat <<EOF | tee /etc/sysctl.d/k8s.conf
-          net.bridge.bridge-nf-call-iptables  = 1
-          net.bridge.bridge-nf-call-ip6tables = 1
-          net.ipv4.ip_forward                 = 1
-          EOF
-          sysctl --system
+      shell: |
+        cat <<EOF > /etc/sysctl.d/k8s.conf
+        net.bridge.bridge-nf-call-iptables  = 1
+        net.bridge.bridge-nf-call-ip6tables = 1
+        net.ipv4.ip_forward                 = 1
+        EOF
+        sysctl --system
 
-    # ============================================================
-    # Установка containerd
-    # ============================================================
+    # containerd
     - name: Install containerd
-      ansible.builtin.apt:
+      apt:
         name: containerd
         state: present
-
-    - name: Create containerd config directory
-      ansible.builtin.file:
-        path: /etc/containerd
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
-
-    - name: Generate default containerd config
-      ansible.builtin.shell:
-        cmd: containerd config default > /etc/containerd/config.toml
-      args:
-        creates: /etc/containerd/config.toml
-
-    - name: Set systemd cgroup driver for containerd
-      ansible.builtin.replace:
-        path: /etc/containerd/config.toml
-        regexp: 'SystemdCgroup = false'
-        replace: 'SystemdCgroup = true'
-
-    - name: Restart containerd and enable
-      ansible.builtin.systemd:
+    - name: Configure containerd
+      shell: |
+        containerd config default > /etc/containerd/config.toml
+        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+    - name: Restart containerd
+      systemd:
         name: containerd
         state: restarted
         enabled: yes
-        daemon_reload: yes
 
-    - name: Wait for containerd socket
-      ansible.builtin.wait_for:
-        path: /run/containerd/containerd.sock
-        state: present
-        timeout: 30
-
-    # ============================================================
-    # Установка kubeadm, kubelet, kubectl
-    # ============================================================
+    # Kubernetes компоненты
     - name: Add Kubernetes apt repo
-      ansible.builtin.shell:
-        cmd: |
-          curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-          echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /" | tee /etc/apt/sources.list.d/kubernetes.list
-          apt update
-
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+        apt update
     - name: Install kubeadm, kubelet, kubectl
-      ansible.builtin.apt:
+      apt:
         name:
           - kubeadm
           - kubelet
           - kubectl
         state: present
-        update_cache: yes
 
-    - name: Hold Kubernetes packages
-      ansible.builtin.shell:
-        cmd: apt-mark hold kubeadm kubelet kubectl
-
-    # ============================================================
-    # Инициализация кластера с containerd
-    # ============================================================
-    - name: Initialize Kubernetes cluster
-      ansible.builtin.shell:
-        cmd: |
-          kubeadm init --pod-network-cidr={{ pod_network_cidr }} --service-cidr={{ service_cidr }} --cri-socket unix:///run/containerd/containerd.sock
+    # Инициализация кластера
+    - name: Initialize cluster
+      shell: |
+        kubeadm init --pod-network-cidr={{ pod_network_cidr }} --cri-socket unix:///run/containerd/containerd.sock
+      args:
         creates: /etc/kubernetes/admin.conf
-      register: init_result
-      until: init_result.rc == 0
-      retries: 3
-      delay: 10
-
-    - name: Create .kube directory for root
-      ansible.builtin.file:
-        path: /root/.kube
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
 
     - name: Copy admin.conf to root
-      ansible.builtin.copy:
+      copy:
         src: /etc/kubernetes/admin.conf
         dest: /root/.kube/config
         remote_src: yes
@@ -159,155 +73,45 @@
         group: root
         mode: '0600'
 
-    - name: Set KUBECONFIG environment variable
-      ansible.builtin.lineinfile:
-        path: /root/.bashrc
-        line: 'export KUBECONFIG=/root/.kube/config'
-        create: yes
+    # CNI (Flannel)
+    - name: Install Flannel
+      shell: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
 
-    # ============================================================
-    # Установка Pod Network (Flannel)
-    # ============================================================
-    - name: Install Flannel CNI
-      ansible.builtin.shell:
-        cmd: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-      register: flannel
-      until: flannel.rc == 0
-      retries: 5
-      delay: 10
-
-    - name: Allow pods on control plane (single-node cluster)
-      ansible.builtin.shell:
-        cmd: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+    # Разрешить поды на control-plane (single node)
+    - name: Allow pods on control plane
+      shell: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
       ignore_errors: yes
 
-    # ============================================================
-    # Установка Helm
-    # ============================================================
+    # Helm
     - name: Install Helm
-      ansible.builtin.shell:
-        cmd: |
-          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-          chmod 700 get_helm.sh
-          ./get_helm.sh --version {{ helm_version }}
+      shell: |
+        curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        chmod 700 get_helm.sh
+        ./get_helm.sh
       args:
         creates: /usr/local/bin/helm
 
-    # ============================================================
-    # Установка ArgoCD
-    # ============================================================
-    - name: Create argocd namespace
-      kubernetes.core.k8s:
-        name: argocd
-        api_version: v1
-        kind: Namespace
-        state: present
-
+    # ArgoCD
     - name: Install ArgoCD
-      kubernetes.core.k8s:
-        state: present
-        src: https://raw.githubusercontent.com/argoproj/argo-cd/{{ argocd_version }}/manifests/install.yaml
-        namespace: argocd
+      shell: |
+        kubectl create namespace argocd || true
+        kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-    - name: Wait for ArgoCD pods
-      ansible.builtin.shell:
-        cmd: kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
-      register: argocd_wait
+    - name: Wait for ArgoCD server
+      shell: kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
       retries: 10
       delay: 10
-      until: argocd_wait.rc == 0
 
     - name: Get ArgoCD admin password
-      ansible.builtin.shell:
-        cmd: |
-          kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+      shell: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
       register: argocd_password
       changed_when: false
 
-    - name: Display ArgoCD info
-      ansible.builtin.debug:
-        msg: |
-          ✅ ArgoCD installed!
-          🔗 UI (port-forward): kubectl port-forward svc/argocd-server -n argocd 8080:443
-          🔑 Admin password: {{ argocd_password.stdout }}
+    - name: Show ArgoCD password
+      debug:
+        msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
 
-    # ============================================================
-    # Установка Prometheus + Grafana
-    # ============================================================
-    - name: Add prometheus-community repo
-      kubernetes.core.helm_repository:
-        name: prometheus-community
-        repo_url: https://prometheus-community.github.io/helm-charts
-
-    - name: Deploy kube-prometheus-stack
-      kubernetes.core.helm:
-        name: prometheus
-        chart_ref: prometheus-community/kube-prometheus-stack
-        chart_version: "{{ prometheus_stack_version }}"
-        release_namespace: monitoring
-        create_namespace: true
-        wait: true
-        wait_timeout: 5m
-        values:
-          grafana:
-            adminPassword: admin
-            service:
-              type: NodePort
-              nodePort: 30300
-          prometheus:
-            prometheusSpec:
-              resources:
-                limits:
-                  memory: 512Mi
-                  cpu: 500m
-                requests:
-                  memory: 256Mi
-                  cpu: 200m
-
-    # ============================================================
-    # Установка Loki + Promtail (опционально)
-    # ============================================================
-    - name: Add grafana repo
-      kubernetes.core.helm_repository:
-        name: grafana
-        repo_url: https://grafana.github.io/helm-charts
-
-    - name: Deploy Loki stack
-      kubernetes.core.helm:
-        name: loki
-        chart_ref: grafana/loki-stack
-        chart_version: "{{ loki_stack_version }}"
-        release_namespace: logging
-        create_namespace: true
-        wait: true
-        wait_timeout: 3m
-        values:
-          grafana:
-            enabled: false
-          promtail:
-            enabled: true
-          loki:
-            resources:
-              limits:
-                memory: 256Mi
-                cpu: 200m
-              requests:
-                memory: 128Mi
-                cpu: 100m
-
-    # ============================================================
-    # Применение ArgoCD Application (GitOps)
-    # ============================================================
+    # Применяем ArgoCD Application (предварительно создайте файл в репозитории)
     - name: Apply ArgoCD Application
-      kubernetes.core.k8s:
-        state: present
-        src: https://raw.githubusercontent.com/Egorict/K8s/main/k8s/argocd/application.yaml
+      shell: kubectl apply -f https://raw.githubusercontent.com/Egorict/K8s/main/k8s/argocd/application.yaml
       ignore_errors: yes
-
-    - name: Final status
-      ansible.builtin.debug:
-        msg: |
-          🎉 ALL DONE!
-          📦 Application synced from Git: {{ repo_url }}
-          🌐 Доступ к приложению: http://{{ ansible_default_ipv4.address }}:{{ nodeport }}
-          📊 Grafana: http://{{ ansible_default_ipv4.address }}:30300 (admin/admin)
