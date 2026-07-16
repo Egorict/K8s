@@ -62,7 +62,8 @@ jobs:
           sed -i "s|tag:.*|tag: ${{ github.sha }}|" ${{ env.VALUES_FILE }}
           cat ${{ env.VALUES_FILE }}
 
-      - name: Commit and push values.yaml
+      - name: Commit and push changes to values.yaml
+        if: github.event_name == 'push'
         run: |
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -70,4 +71,4 @@ jobs:
           git diff --staged --quiet || git commit -m "Update image tag to ${{ github.sha }} [skip ci]"
           git push
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}   # используем PAT для пуша
