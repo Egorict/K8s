@@ -49,7 +49,8 @@ jobs:
             fi
             cd DevopsProject
             git pull origin master
-
+            ls -la ansible/
+            pwd
             # Запустить плейбук для установки K8s, ArgoCD, мониторинга
             ansible-playbook ansible/playbook-k8s.yaml -c local -i localhost,
 
