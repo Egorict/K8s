@@ -1,0 +1,7 @@
+---
+- name: Install Flannel
+  shell: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+
+- name: Allow pods on control plane (single node)
+  shell: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+  ignore_errors: yes

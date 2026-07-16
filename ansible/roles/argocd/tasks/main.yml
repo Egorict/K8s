@@ -1,0 +1,49 @@
+---
+- name: Remove old ArgoCD namespace if exists
+  shell: |
+    kubectl delete namespace argocd --ignore-not-found=true
+    sleep 5
+  changed_when: false
+
+- name: Remove old ArgoCD CRDs
+  shell: |
+    kubectl delete crd applications.argoproj.io appprojects.argoproj.io --ignore-not-found=true
+    sleep 5
+  changed_when: false
+
+- name: Add ArgoCD Helm repo
+  shell: |
+    helm repo add argo https://argoproj.github.io/argo-helm
+    helm repo update
+
+- name: Install ArgoCD via Helm
+  shell: |
+    helm upgrade --install argocd argo/argo-cd \
+      --namespace argocd --create-namespace \
+      --set server.service.type=NodePort \
+      --set server.service.nodePortHttp=30080 \
+      --set server.service.nodePortHttps=30443
+  register: argocd_install
+  until: argocd_install.rc == 0
+  retries: 3
+  delay: 10
+
+- name: Wait for ArgoCD server pod
+  shell: kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
+  retries: 10
+  delay: 10
+  register: argocd_wait
+  until: argocd_wait.rc == 0
+
+- name: Get ArgoCD admin password
+  shell: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+  register: argocd_password
+  changed_when: false
+
+- name: Show ArgoCD password
+  debug:
+    msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
+
+- name: Apply ArgoCD Application
+  shell: kubectl apply -f https://raw.githubusercontent.com/Egorict/K8s/main/k8s/argocd/application.yaml
+  ignore_errors: yes

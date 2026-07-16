@@ -1,0 +1,62 @@
+---
+- name: Add Kubernetes apt repo
+  shell: |
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+    apt update
+
+- name: Install kubeadm, kubelet, kubectl
+  apt:
+    name:
+      - kubeadm
+      - kubelet
+      - kubectl
+    state: present
+
+- name: Initialize cluster
+  shell: |
+    kubeadm init --pod-network-cidr={{ pod_network_cidr }} --cri-socket unix:///run/containerd/containerd.sock
+  args:
+    creates: /etc/kubernetes/admin.conf
+
+- name: Create .kube directory for root
+  file:
+    path: /root/.kube
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy admin.conf to root
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /root/.kube/config
+    remote_src: yes
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Create .kube directory for user
+  file:
+    path: "/home/{{ user_name }}/.kube"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: '0755'
+
+- name: Copy admin.conf to user's home
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "/home/{{ user_name }}/.kube/config"
+    remote_src: yes
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: '0600'
+
+- name: Set KUBECONFIG for user in .bashrc
+  lineinfile:
+    path: "/home/{{ user_name }}/.bashrc"
+    line: 'export KUBECONFIG=/home/{{ user_name }}/.kube/config'
+    create: yes
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"

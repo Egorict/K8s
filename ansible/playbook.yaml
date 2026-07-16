@@ -1,0 +1,16 @@
+---
+- name: Deploy Kubernetes cluster with ArgoCD
+  hosts: all
+  become: yes
+  vars:
+    kubernetes_version: "1.28"
+    pod_network_cidr: "10.244.0.0/16"
+    user_name: "user"
+
+  roles:
+    - common
+    - containerd
+    - kubernetes
+    - cni
+    - helm
+    - argocd
