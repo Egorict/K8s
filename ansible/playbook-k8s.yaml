@@ -5,6 +5,7 @@
   vars:
     kubernetes_version: "1.28"
     pod_network_cidr: "10.244.0.0/16"
+    user_name: "user"   # <-- задаём имя пользователя
 
   tasks:
     # Подготовка системы
@@ -64,6 +65,15 @@
       args:
         creates: /etc/kubernetes/admin.conf
 
+    # Настройка доступа для root
+    - name: Create .kube directory for root
+      file:
+        path: /root/.kube
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
     - name: Copy admin.conf to root
       copy:
         src: /etc/kubernetes/admin.conf
@@ -72,6 +82,32 @@
         owner: root
         group: root
         mode: '0600'
+
+    # Настройка доступа для пользователя user
+    - name: Create .kube directory for user
+      file:
+        path: "/home/{{ user_name }}/.kube"
+        state: directory
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
+        mode: '0755'
+
+    - name: Copy admin.conf to user's home
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "/home/{{ user_name }}/.kube/config"
+        remote_src: yes
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
+        mode: '0600'
+
+    - name: Set KUBECONFIG for user in .bashrc
+      lineinfile:
+        path: "/home/{{ user_name }}/.bashrc"
+        line: 'export KUBECONFIG=/home/{{ user_name }}/.kube/config'
+        create: yes
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
 
     # CNI (Flannel)
     - name: Install Flannel
