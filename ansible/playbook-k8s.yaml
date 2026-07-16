@@ -1,10 +1,10 @@
 ---
-- name: Full Kubernetes cluster setup (kubeadm + Helm + ArgoCD + monitoring)
+- name: Install Kubernetes cluster (kubeadm) with ArgoCD and monitoring
   hosts: all
   become: yes
   vars:
     kubernetes_version: "1.28"
-    pod_network_cidr: "10.244.0.0/16"   # для Flannel
+    pod_network_cidr: "10.244.0.0/16"
     service_cidr: "10.96.0.0/12"
     helm_version: "v3.12.0"
     argocd_version: "stable"
@@ -15,9 +15,6 @@
     nodeport: 30080
 
   tasks:
-    # ============================================================
-    # 1. Подготовка системы
-    # ============================================================
     - name: Update apt cache
       ansible.builtin.apt:
         update_cache: yes
@@ -37,7 +34,7 @@
           - lsb-release
         state: present
 
-    - name: Disable swap (kubeadm requirement)
+    - name: Disable swap
       ansible.builtin.command:
         cmd: swapoff -a
       changed_when: false
@@ -48,7 +45,7 @@
         regexp: '^.*swap.*$'
         replace: ''
 
-    - name: Load required kernel modules
+    - name: Load kernel modules
       ansible.builtin.shell:
         cmd: |
           cat <<EOF | tee /etc/modules-load.d/k8s.conf
@@ -58,7 +55,7 @@
           modprobe overlay
           modprobe br_netfilter
 
-    - name: Set sysctl params for Kubernetes
+    - name: Set sysctl params
       ansible.builtin.shell:
         cmd: |
           cat <<EOF | tee /etc/sysctl.d/k8s.conf
@@ -68,9 +65,6 @@
           EOF
           sysctl --system
 
-    # ============================================================
-    # 2. Установка Docker и cri-dockerd
-    # ============================================================
     - name: Install Docker
       ansible.builtin.shell:
         cmd: |
@@ -79,13 +73,7 @@
       args:
         creates: /usr/bin/docker
 
-    - name: Add user to docker group
-      ansible.builtin.user:
-        name: "{{ ansible_user }}"
-        groups: docker
-        append: yes
-
-    - name: Install cri-dockerd (adapter for Docker)
+    - name: Install cri-dockerd
       ansible.builtin.shell:
         cmd: |
           VER=$(curl -s https://api.github.com/repos/Mirantis/cri-dockerd/releases/latest|grep tag_name|cut -d '"' -f 4)
@@ -110,9 +98,6 @@
           systemctl daemon-reload
           systemctl enable --now cri-docker
 
-    # ============================================================
-    # 3. Установка kubeadm, kubelet, kubectl
-    # ============================================================
     - name: Add Kubernetes apt repo
       ansible.builtin.shell:
         cmd: |
@@ -129,26 +114,11 @@
         state: present
         update_cache: yes
 
-    - name: Hold versions
-      ansible.builtin.shell:
-        cmd: apt-mark hold kubeadm kubelet kubectl
-
-    # ============================================================
-    # 4. Инициализация кластера (kubeadm init)
-    # ============================================================
     - name: Initialize Kubernetes cluster
       ansible.builtin.shell:
         cmd: |
           kubeadm init --pod-network-cidr={{ pod_network_cidr }} --service-cidr={{ service_cidr }} --cri-socket unix:///var/run/cri-dockerd.sock
         creates: /etc/kubernetes/admin.conf
-
-    - name: Create .kube directory for root
-      ansible.builtin.file:
-        path: /root/.kube
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
 
     - name: Copy admin.conf to root
       ansible.builtin.copy:
@@ -159,31 +129,15 @@
         group: root
         mode: '0600'
 
-    - name: Set KUBECONFIG environment
-      ansible.builtin.lineinfile:
-        path: /root/.bashrc
-        line: 'export KUBECONFIG=/root/.kube/config'
-        create: yes
-
-    # ============================================================
-    # 5. Установка Pod Network (Flannel)
-    # ============================================================
     - name: Install Flannel CNI
       ansible.builtin.shell:
         cmd: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-      register: flannel
-      until: flannel.rc == 0
-      retries: 5
-      delay: 10
 
-    - name: Allow pods on control plane (for single-node cluster)
+    - name: Allow pods on control plane
       ansible.builtin.shell:
         cmd: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
       ignore_errors: yes
 
-    # ============================================================
-    # 6. Установка Helm
-    # ============================================================
     - name: Install Helm
       ansible.builtin.shell:
         cmd: |
@@ -193,53 +147,13 @@
       args:
         creates: /usr/local/bin/helm
 
-    # ============================================================
-    # 7. Установка ArgoCD
-    # ============================================================
-    - name: Create argocd namespace
-      kubernetes.core.k8s:
-        name: argocd
-        api_version: v1
-        kind: Namespace
-        state: present
-
     - name: Install ArgoCD
       kubernetes.core.k8s:
         state: present
         src: https://raw.githubusercontent.com/argoproj/argo-cd/{{ argocd_version }}/manifests/install.yaml
         namespace: argocd
 
-    - name: Wait for ArgoCD pods
-      ansible.builtin.shell:
-        cmd: kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
-      register: argocd_wait
-      retries: 10
-      delay: 10
-      until: argocd_wait.rc == 0
-
-    - name: Get ArgoCD admin password
-      ansible.builtin.shell:
-        cmd: |
-          kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
-      register: argocd_password
-      changed_when: false
-
-    - name: Display ArgoCD info
-      ansible.builtin.debug:
-        msg: |
-          ✅ ArgoCD installed!
-          🔗 UI (port-forward): kubectl port-forward svc/argocd-server -n argocd 8080:443
-          🔑 Admin password: {{ argocd_password.stdout }}
-
-    # ============================================================
-    # 8. Установка Prometheus + Grafana (мониторинг)
-    # ============================================================
-    - name: Add prometheus-community repo
-      kubernetes.core.helm_repository:
-        name: prometheus-community
-        repo_url: https://prometheus-community.github.io/helm-charts
-
-    - name: Deploy kube-prometheus-stack
+    - name: Install Prometheus + Grafana
       kubernetes.core.helm:
         name: prometheus
         chart_ref: prometheus-community/kube-prometheus-stack
@@ -264,15 +178,7 @@
                   memory: 256Mi
                   cpu: 200m
 
-    # ============================================================
-    # 9. (Опционально) Loki + Promtail – логи
-    # ============================================================
-    - name: Add grafana repo
-      kubernetes.core.helm_repository:
-        name: grafana
-        repo_url: https://grafana.github.io/helm-charts
-
-    - name: Deploy Loki stack
+    - name: Install Loki + Promtail
       kubernetes.core.helm:
         name: loki
         chart_ref: grafana/loki-stack
@@ -295,23 +201,8 @@
                 memory: 128Mi
                 cpu: 100m
 
-    # ============================================================
-    # 10. Применение ArgoCD Application (GitOps)
-    # ============================================================
-    - name: Create Application manifest from template
-      ansible.builtin.template:
-        src: templates/application.yaml.j2
-        dest: /tmp/application.yaml
-
     - name: Apply ArgoCD Application
       kubernetes.core.k8s:
         state: present
-        src: /tmp/application.yaml
-
-    - name: Final status
-      ansible.builtin.debug:
-        msg: |
-          🎉 ALL DONE!
-          📦 Application synced from Git: {{ repo_url }}
-          🌐 Доступ к приложению: http://{{ ansible_default_ipv4.address }}:{{ nodeport }}
-          📊 Grafana: http://{{ ansible_default_ipv4.address }}:30300 (admin/admin)
+        src: "{{ repo_url }}/raw/master/{{ app_path }}/application.yaml"
+      ignore_errors: yes
