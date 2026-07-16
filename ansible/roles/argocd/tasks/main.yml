@@ -1,13 +1,26 @@
 ---
-- name: Remove old ArgoCD namespace if exists
+- name: Delete all ArgoCD resources (including global)
   shell: |
-    kubectl delete namespace argocd --ignore-not-found=true
-    sleep 5
-  changed_when: false
+    # Удаляем все ресурсы из манифеста установки
+    kubectl delete -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml --ignore-not-found=true 2>/dev/null || true
+    sleep 3
 
-- name: Remove old ArgoCD CRDs
-  shell: |
-    kubectl delete crd applications.argoproj.io appprojects.argoproj.io --ignore-not-found=true
+    # Удаляем неймспейс argocd
+    kubectl delete namespace argocd --ignore-not-found=true 2>/dev/null || true
+    sleep 3
+
+    # Удаляем CRDs
+    kubectl delete crd applications.argoproj.io appprojects.argoproj.io --ignore-not-found=true 2>/dev/null || true
+    sleep 3
+
+    # Удаляем все ClusterRole и ClusterRoleBinding, связанные с ArgoCD
+    kubectl delete clusterrole argocd-application-controller argocd-applicationset-controller argocd-server argocd-redis argocd-repo-server argocd-dex-server argocd-notifications-controller --ignore-not-found=true 2>/dev/null || true
+    kubectl delete clusterrolebinding argocd-application-controller argocd-applicationset-controller argocd-server --ignore-not-found=true 2>/dev/null || true
+
+    # Удаляем ServiceAccount в других неймспейсах (если есть)
+    kubectl delete sa argocd-application-controller argocd-applicationset-controller argocd-dex-server argocd-redis argocd-repo-server argocd-server argocd-notifications-controller -n argocd --ignore-not-found=true 2>/dev/null || true
+
+    # Ждём, чтобы удаление завершилось
     sleep 5
   changed_when: false
 
