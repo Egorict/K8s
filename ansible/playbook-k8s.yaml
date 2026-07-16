@@ -127,10 +127,16 @@
       args:
         creates: /usr/local/bin/helm
 
-    # ArgoCD (установка через Helm)
+    # ArgoCD (установка через Helm) – чистим всё
     - name: Remove old ArgoCD namespace if exists
       shell: |
         kubectl delete namespace argocd --ignore-not-found=true
+        sleep 5
+      changed_when: false
+
+    - name: Remove old ArgoCD CRDs
+      shell: |
+        kubectl delete crd applications.argoproj.io appprojects.argoproj.io --ignore-not-found=true
         sleep 5
       changed_when: false
 
@@ -167,7 +173,7 @@
       debug:
         msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
 
-    # Применяем ArgoCD Application (предварительно создайте файл в репозитории)
+    # Применяем ArgoCD Application
     - name: Apply ArgoCD Application
       shell: kubectl apply -f https://raw.githubusercontent.com/Egorict/K8s/main/k8s/argocd/application.yaml
       ignore_errors: yes
