@@ -4,13 +4,24 @@
     name: containerd
     state: present
 
-- name: Configure containerd
+- name: Create containerd config directory
+  file:
+    path: /etc/containerd
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Generate containerd config
   shell: |
     containerd config default > /etc/containerd/config.toml
     sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+  args:
+    creates: /etc/containerd/config.toml  # не перезаписывать при повторных запусках
 
 - name: Restart containerd
   systemd:
     name: containerd
     state: restarted
     enabled: yes
+    daemon_reload: yes
