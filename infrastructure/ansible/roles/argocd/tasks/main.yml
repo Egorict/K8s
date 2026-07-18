@@ -42,7 +42,8 @@
   debug:
     msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
 
-- name: Apply ArgoCD Application
-  shell: kubectl apply -f https://raw.githubusercontent.com/Egorict/K8s/master/infrastructure/k8s/argocd/application.yaml
+- name: Apply all ArgoCD Applications
+  shell: |
+    kubectl apply -f infrastructure/k8s/argocd/
   ignore_errors: yes
   when: argocd_wait.rc == 0
