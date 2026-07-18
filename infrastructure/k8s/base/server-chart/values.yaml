@@ -1,0 +1,30 @@
+image:
+  repository: ermakov880/server
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+db:
+  host: db
+  port: 5432
+  user: postgres
+  password: postgres
+  name: savedata
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+replicaCount: 1
+
+# Переменные окружения, которые будут переданы в под
+env:
+  - name: PORT
+    value: "8080"
