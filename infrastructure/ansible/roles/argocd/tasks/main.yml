@@ -42,10 +42,17 @@
   debug:
     msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
 
-- name: Apply all ArgoCD Applications
-  shell: |
-    kubectl apply -f infrastructure/k8s/argocd/application.yaml
-    kubectl apply -f infrastructure/k8s/argocd/server-app.yaml
-    kubectl apply -f infrastructure/k8s/argocd/database-app.yaml
-  ignore_errors: yes
+- name: Generate and apply ArgoCD Applications
+  template:
+    src: app.yaml.j2
+    dest: "/tmp/{{ item.name }}.yaml"
+  loop:
+    - { name: client-app, chart_path: infrastructure/k8s/base/myapp-chart }
+    - { name: server-app, chart_path: infrastructure/k8s/base/server-chart }
+    - { name: database-app, chart_path: infrastructure/k8s/base/database-chart }
+  register: app_files
+
+- name: Apply generated Applications
+  shell: kubectl apply -f {{ item.dest }}
+  loop: "{{ app_files.results }}"
   when: argocd_wait.rc == 0

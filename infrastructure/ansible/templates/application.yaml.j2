@@ -1,23 +1,20 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: myapp
+  name: {{ app_name }}
   namespace: argocd
 spec:
   project: default
   source:
-    repoURL: {{ repo_url }}
+    repoURL: https://github.com/Egorict/K8s.git
     targetRevision: HEAD
-    path: {{ app_path }}
-    helm:
-      valueFiles:
-        - values.yaml
+    path: {{ chart_path }}
   destination:
     server: https://kubernetes.default.svc
-    namespace: default
+    namespace: {{ namespace | default('default') }}
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
-    - CreateNamespace=true
+      - CreateNamespace=true
