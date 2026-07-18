@@ -3,7 +3,6 @@ const path = require('path');
 
 const DATA_FILE = path.join(__dirname, '..', 'data', 'saved_data.json');
 
-// Инициализация: создаём папку и файл, если их нет
 const initDB = async () => {
   try {
     await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
@@ -16,19 +15,16 @@ const initDB = async () => {
   }
 };
 
-// Получить все записи
 const getAll = async () => {
   const data = await fs.readFile(DATA_FILE, 'utf-8');
   return JSON.parse(data);
 };
 
-// Получить по id
 const getById = async (id) => {
   const items = await getAll();
   return items.find(item => item.id === id);
 };
 
-// Создать новую запись
 const createItem = async (name, value) => {
   const items = await getAll();
   const newItem = {

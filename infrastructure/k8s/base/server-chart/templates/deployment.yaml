@@ -20,11 +20,6 @@ spec:
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
         - containerPort: {{ .Values.service.port }}
-        envFrom:
-        - configMapRef:
-            name: {{ include "server.fullname" . }}-config
-        - secretRef:
-            name: {{ include "server.fullname" . }}-db-secret
         env:
         {{- toYaml .Values.env | nindent 8 }}
         resources:

@@ -7,14 +7,6 @@ service:
   type: ClusterIP
   port: 8080
 
-db:
-  host: db   # имя сервиса БД
-  port: 5432
-  user: postgres
-  password: postgres
-  name: savedata
-
-
 resources:
   limits:
     cpu: 500m
@@ -25,7 +17,6 @@ resources:
 
 replicaCount: 1
 
-# Переменные окружения, которые будут переданы в под
 env:
   - name: PORT
     value: "8080"
