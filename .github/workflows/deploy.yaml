@@ -6,7 +6,7 @@ on:
 
 env:
   IMAGE_NAME: ermakov880/devops-project
-  VALUES_FILE: k8s/base/myapp-chart/values.yaml
+  VALUES_FILE: infrastructure/k8s/base/myapp-chart/values.yaml
 
 jobs:
   # 1. Развернуть инфраструктуру (один раз или при изменениях)
