@@ -56,6 +56,7 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ermakov880/devops-project-server:latest
 
       - name: Update values.yaml with new tag
         run: |
