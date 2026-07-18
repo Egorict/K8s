@@ -1,0 +1,34 @@
+# Git
+.git/
+.gitignore
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json   # если не используешь в образе
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Временные файлы
+*.tmp
+*.log
+.DS_Store
+
+# Данные (не копировать в образ)
+data/
+*.db
+*.sqlite
+
+# Тесты и документация
+tests/
+docs/
+README.md
+
+# Конфиги окружения
+.env
+.env.local
+.env.*.local
