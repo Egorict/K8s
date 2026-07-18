@@ -44,6 +44,8 @@
 
 - name: Apply all ArgoCD Applications
   shell: |
-    kubectl apply -f infrastructure/k8s/argocd/
+    kubectl apply -f infrastructure/k8s/argocd/application.yaml
+    kubectl apply -f infrastructure/k8s/argocd/server-app.yaml
+    kubectl apply -f infrastructure/k8s/argocd/database-app.yaml
   ignore_errors: yes
   when: argocd_wait.rc == 0
