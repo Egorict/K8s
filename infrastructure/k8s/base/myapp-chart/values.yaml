@@ -1,4 +1,4 @@
-replicaCount: 3
+replicaCount: 1
 image:
   repository: ermakov880/devops-project
   tag: c9b7f61cb900b49b9d39db2013bb6c6f061ded9b
