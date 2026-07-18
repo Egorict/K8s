@@ -10,7 +10,7 @@ postgresDb: savedata
 persistence:
   enabled: true
   size: 1Gi
-  storageClass: ""
+  storageClass: "yc-network-ssd"   # или "yc-network-ssd" – зависит от облака
 
 service:
   type: ClusterIP
