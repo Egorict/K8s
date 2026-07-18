@@ -13,7 +13,7 @@ app.get('/health', (req, res) => {
 });
 
 const start = async () => {
-  await initDB();
+  // await initDB();
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
   });
