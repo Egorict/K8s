@@ -51,7 +51,7 @@ jobs:
       - name: Build and push image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./Apps/client
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
