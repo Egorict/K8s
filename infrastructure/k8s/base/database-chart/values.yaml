@@ -10,8 +10,7 @@ postgresDb: savedata
 persistence:
   enabled: true
   size: 1Gi
-  storageClass: "yc-network-ssd"   # или "yc-network-ssd" – зависит от облака
-
+  # storageClass не нужно указывать, т.к. мы жёстко прописали в PV и PVC
 service:
   type: ClusterIP
   port: 5432

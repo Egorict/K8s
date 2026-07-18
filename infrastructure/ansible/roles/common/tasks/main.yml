@@ -21,3 +21,11 @@
     net.ipv4.ip_forward                 = 1
     EOF
     sysctl --system
+
+- name: Create directory for persistent volume
+  file:
+    path: /mnt/data
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
