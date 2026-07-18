@@ -8,6 +8,12 @@
     sleep 5
   changed_when: false
 
+- name: Force remove existing ArgoCD Helm release (if any)
+  shell: |
+    helm uninstall argocd -n argocd --ignore-not-found 2>/dev/null || true
+    sleep 5
+  changed_when: false
+  
 - name: Add ArgoCD Helm repo
   shell: |
     helm repo add argo https://argoproj.github.io/argo-helm
