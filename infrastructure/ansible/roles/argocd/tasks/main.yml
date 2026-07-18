@@ -49,7 +49,7 @@
   loop:
     - { name: client-app, chart_path: infrastructure/k8s/base/myapp-chart }
     - { name: server-app, chart_path: infrastructure/k8s/base/server-chart }
-    - { name: database-app, chart_path: infrastructure/k8s/base/database-chart }
+  #  - { name: database-app, chart_path: infrastructure/k8s/base/database-chart }
   register: app_files
 
 - name: Apply generated Applications
