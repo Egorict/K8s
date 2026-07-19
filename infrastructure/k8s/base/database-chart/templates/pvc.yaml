@@ -1,15 +1,11 @@
-{{- if .Values.persistence.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "database.fullname" . }}-pvc
-  labels:
-    app: {{ include "database.name" . }}
+  name: postgres-pvc
+  namespace: default
 spec:
-  storageClassName: manual
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: {{ .Values.persistence.size }}
-{{- end }}
+      storage: 5Gi

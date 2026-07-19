@@ -1,26 +1,14 @@
-image:
-  repository: postgres
-  tag: "15"
-  pullPolicy: IfNotPresent
-
-postgresUser: postgres
-postgresPassword: postgres
-postgresDb: savedata
-
-persistence:
-  enabled: true
-  size: 1Gi
-  # storageClass не нужно указывать, т.к. мы жёстко прописали в PV и PVC
-service:
-  type: ClusterIP
-  port: 5432
-
-resources:
-  limits:
-    cpu: 500m
-    memory: 512Mi
-  requests:
-    cpu: 250m
-    memory: 256Mi
-
-fullnameOverride: "db"
+env:
+  - name: DB_HOST
+    value: db-service
+  - name: DB_PORT
+    value: "5432"
+  - name: DB_USER
+    value: myuser
+  - name: DB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: postgres-secret
+        key: POSTGRES_PASSWORD
+  - name: DB_NAME
+    value: mydb
