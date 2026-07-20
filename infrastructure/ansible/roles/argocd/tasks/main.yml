@@ -13,12 +13,6 @@
     helm uninstall argocd -n argocd --ignore-not-found 2>/dev/null || true
     sleep 5
   changed_when: false
-  
-- name: Delete old PVC to force recreation with Longhorn
-  shell: |
-    kubectl delete pvc postgres-pvc -n default --ignore-not-found=true
-  when: argocd_wait.rc == 0
-  changed_when: true
 
 - name: Add ArgoCD Helm repo
   shell: |
