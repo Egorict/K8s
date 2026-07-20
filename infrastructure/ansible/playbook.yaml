@@ -14,4 +14,4 @@
     - cni
     - helm
     - argocd
-    - yandex
+#    - yandex
