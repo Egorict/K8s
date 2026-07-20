@@ -56,7 +56,7 @@
 
 - name: Apply StorageClass for Yandex Cloud HDD
   shell: |
-    kubectl apply -f infrastructure/k8s/storage-class.yaml
+    kubectl apply -f ../k8s/storage-class.yaml
   when: argocd_wait.rc == 0
   changed_when: true
 
