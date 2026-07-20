@@ -3,7 +3,7 @@ apiVersion: storage.k8s.io/v1
 metadata:
   name: yc-network-hdd
 provisioner: disk-csi-driver.mks.ycloud.io
-volumeBindingMode: WaitForFirstConsumer
+volumeBindingMode: Immediate
 parameters:
   type: network-hdd
   csi.storage.k8s.io/fstype: ext4
