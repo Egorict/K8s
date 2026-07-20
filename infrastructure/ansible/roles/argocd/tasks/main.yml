@@ -22,12 +22,14 @@
 - name: Install ArgoCD via manifests
   shell: |
     kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+    # Remove the oversized annotation from the Applicationset CRD (if exists)
+    kubectl patch crd applicationsets.argoproj.io -p '{"metadata":{"annotations":{"kubectl.kubernetes.io/last-applied-configuration":null}}}' --type=merge 2>/dev/null || true
     kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
   register: argocd_install
   until: argocd_install.rc == 0
   retries: 3
   delay: 10
-
+  
 - name: Wait for all ArgoCD pods
   shell: kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s
   retries: 10
