@@ -1,7 +1,7 @@
 replicaCount: 1
 image:
   repository: ermakov880/devops-project
-  tag: 9044e201071e7d244faadf9ead7900b787003d64
+  tag: 17984e8e465e451fb8ac445238391507ea1ded2d
   pullPolicy: Always
 service:
   type: NodePort
