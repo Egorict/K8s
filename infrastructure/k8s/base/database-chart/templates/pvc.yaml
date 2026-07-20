@@ -9,4 +9,4 @@ spec:
   resources:
     requests:
       storage: 5Gi
-  storageClassName: yc-network-hdd   # ← добавьте эту строку
+  storageClassName: longhorn   # <-- изменено

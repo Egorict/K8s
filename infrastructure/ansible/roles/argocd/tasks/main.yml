@@ -31,7 +31,7 @@
   until: argocd_install.rc == 0
   retries: 3
   delay: 10
-  
+
 - name: Wait for all ArgoCD pods
   shell: kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s
   retries: 10
@@ -59,12 +59,6 @@
     kubectl delete storageclass yc-network-hdd --ignore-not-found=true
   when: argocd_wait.rc == 0
   changed_when: false
-
-- name: Apply StorageClass for Yandex Cloud HDD
-  shell: |
-    kubectl apply -f ../k8s/storage-class.yaml
-  when: argocd_wait.rc == 0
-  changed_when: true
 
 - name: Generate and apply ArgoCD Applications
   template:
