@@ -54,6 +54,12 @@
   register: argocd_password
   changed_when: false
 
+- name: Delete existing StorageClass (if any) to allow recreation with new binding mode
+  shell: |
+    kubectl delete storageclass yc-network-hdd --ignore-not-found=true
+  when: argocd_wait.rc == 0
+  changed_when: false
+
 - name: Apply StorageClass for Yandex Cloud HDD
   shell: |
     kubectl apply -f ../k8s/storage-class.yaml
