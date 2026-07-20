@@ -80,4 +80,4 @@ jobs:
           git diff --staged --quiet || git commit -m "Update image tag to ${{ github.sha }} [skip ci]"
           git push
         env:
-          GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}   # используем sPAT дл я пуша
+          GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}   # используемф sPAT дл я пуша
