@@ -1,8 +1,8 @@
 ---
 - name: Read service account key JSON (замените путь на ваш)
   set_fact:
-    sa_key_json: "{{ lookup('file', '{{ './key.json' }}"
-
+    sa_key_json: "{{ lookup('file', 'key.json') }}"
+    
 - name: Add Yandex Cloud CSI Helm repo
   shell: |
     helm repo add yandex-cloud-csi https://yandex-cloud.github.io/k8s-csi-s3/helm-charts
