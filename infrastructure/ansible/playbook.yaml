@@ -14,4 +14,5 @@
     - cni
     - helm
     - argocd
+    - longhorn 
 #    - yandex
