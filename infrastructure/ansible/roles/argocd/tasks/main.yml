@@ -48,17 +48,22 @@
   debug:
     msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
 
-- name: Generate and apply ArgoCD Applications
-  template:
-    src: app.yaml.j2
-    dest: "/tmp/{{ item.name }}.yaml"
-  loop:
-    - { name: client-app, chart_path: infrastructure/k8s/base/myapp-chart }
-    - { name: server-app, chart_path: infrastructure/k8s/base/server-chart }
-  #  - { name: database-app, chart_path: infrastructure/k8s/base/database-chart }
-  register: app_files
-
-- name: Apply generated Applications
-  shell: kubectl apply -f {{ item.dest }}
-  loop: "{{ app_files.results }}"
+# ----- ИСПРАВЛЕНИЕ: вместо генерации отдельных Application применяем всю папку -----
+- name: Apply all ArgoCD Application manifests from repository
+  shell: |
+    kubectl apply -f {{ playbook_dir }}/infrastructure/k8s/argocd/
   when: argocd_wait.rc == 0
+  changed_when: true
+
+# (опционально) Можно также применить YAML-файлы для кластерных ресурсов, если они не в папке argocd:
+- name: Apply StorageClass and other global resources (if separate)
+  shell: |
+    kubectl apply -f {{ playbook_dir }}/infrastructure/k8s/base/storage-class.yaml || true
+  when: argocd_wait.rc == 0
+  changed_when: true
+
+- name: Wait for ArgoCD applications to sync (optional)
+  shell: |
+    kubectl wait --for=condition=Synced application --all -n argocd --timeout=120s
+  when: argocd_wait.rc == 0
+  ignore_errors: yes
