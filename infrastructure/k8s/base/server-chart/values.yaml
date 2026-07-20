@@ -21,3 +21,17 @@ replicaCount: 1
 env:
   - name: PORT
     value: "8080"
+  # Добавьте эти переменные:
+  - name: DB_HOST
+    value: db-service
+  - name: DB_PORT
+    value: "5432"
+  - name: DB_USER
+    value: myuser
+  - name: DB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: postgres-secret
+        key: POSTGRES_PASSWORD
+  - name: DB_NAME
+    value: mydb

@@ -1,22 +1,18 @@
 const { Pool } = require('pg');
 
-// Читаем переменные окружения (должны быть заданы в поде)
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '5432', 10),
   user: process.env.DB_USER || 'myuser',
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'mydb',
-  max: 20, // максимум соединений в пуле
+  max: 20,
 });
 
 const initDB = async () => {
   try {
-    // Проверяем подключение
     const client = await pool.connect();
     console.log('✅ Connected to PostgreSQL');
-
-    // Создаём таблицу, если её нет
     await client.query(`
       CREATE TABLE IF NOT EXISTS items (
         id SERIAL PRIMARY KEY,
@@ -29,7 +25,7 @@ const initDB = async () => {
     client.release();
   } catch (err) {
     console.error('❌ Error initializing PostgreSQL:', err.message);
-    throw err; // пробрасываем дальше, чтобы приложение не стартовало
+    throw err;
   }
 };
 
