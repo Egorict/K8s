@@ -12,15 +12,13 @@
 
 - name: Install Yandex Cloud CSI driver
   shell: |
-    helm upgrade --install yandex-cloud-csi yandex-cloud-csi/yandex-cloud-csi \
+    helm upgrade --install yandex-cloud-csi \
+      https://yandex-cloud.github.io/k8s-csi-s3/helm-charts/yandex-cloud-csi-0.1.0.tgz \
       --namespace kube-system \
-      --set folderId=b1gqjj3oln3so2jmt3lp \
+      --set folderId={{ yc_folder_id }} \
       --set serviceAccountKey='{{ sa_key_json }}' \
       --wait
-  environment:
-    KUBECONFIG: /root/.kube/config   # явно указываеsм путь к kubeconfig
   register: helm_install
   retries: 3
   delay: 10
   until: helm_install.rc == 0
-      
