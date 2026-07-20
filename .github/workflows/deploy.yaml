@@ -5,8 +5,8 @@ on:
     branches: [ master, main ]
 
 env:
-  IMAGE_NAME: ermakov880/devops-project
-  VALUES_FILE: infrastructure/k8s/base/myapp-chart/values.yaml
+  IMAGE_NAME: ermakov880/devops-project-server          # ← заменили на серверный образ
+  VALUES_FILE: infrastructure/k8s/base/server-chart/values.yaml   # ← заменили на серверный values
 
 jobs:
   # 1. Развернуть инфраструктуру (один раз или при изменениях)
