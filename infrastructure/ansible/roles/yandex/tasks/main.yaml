@@ -15,10 +15,11 @@
     helm upgrade --install yandex-cloud-csi \
       https://yandex-cloud.github.io/k8s-csi-s3/helm-charts/yandex-cloud-csi-0.1.0.tgz \
       --namespace kube-system \
-      --set folderId={{ yc_folder_id }} \
+      --set folderId=b1gqjj3oln3so2jmt3lp \
       --set serviceAccountKey='{{ sa_key_json }}' \
       --wait
   register: helm_install
   retries: 3
   delay: 10
   until: helm_install.rc == 0
+      
