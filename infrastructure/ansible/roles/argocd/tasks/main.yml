@@ -22,15 +22,16 @@
 - name: Install ArgoCD via Helm
   shell: |
     helm upgrade --install argocd argo/argo-cd \
+      --repo https://charts.argoproj.io/stable \
       --namespace argocd --create-namespace \
       --set server.service.type=NodePort \
       --set server.service.nodePortHttp=30080 \
       --set server.service.nodePortHttps=30443 \
-      --wait
+      --wait --timeout 10m
   register: argocd_install
   until: argocd_install.rc == 0
-  retries: 3
-  delay: 10
+  retries: 5
+  delay: 15
 
 - name: Wait for all ArgoCD pods
   shell: kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s
