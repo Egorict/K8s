@@ -1,0 +1,17 @@
+---
+- name: Read service account key JSON
+  set_fact:
+    sa_key_json: "{{ lookup('file', './authorized_key.json') }}"
+
+- name: Add Yandex Cloud CSI Helm repo
+  shell: |
+    helm repo add yandex-cloud-csi https://yandex-cloud.github.io/k8s-csi-s3/helm-charts
+    helm repo update
+
+- name: Install Yandex Cloud CSI driver
+  shell: |
+    helm upgrade --install yandex-cloud-csi yandex-cloud-csi/yandex-cloud-csi \
+      --namespace kube-system \
+      --set folderId=b1gqjj3oln3so2jmt3lp \
+      --set serviceAccountKey='{{ sa_key_json }}' \
+      --wait
