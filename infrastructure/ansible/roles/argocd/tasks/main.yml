@@ -19,12 +19,14 @@
     helm repo add argo https://argoproj.github.io/argo-helm
     helm repo update
 
-- name: Install ArgoCD via manifests
+- name: Install ArgoCD via Helm
   shell: |
-    kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
-    # Удаляем проблемный CRD, чтобы он пересоздался с корректной аннотацией
-    kubectl delete crd applicationsets.argoproj.io --ignore-not-found=true 2>/dev/null || true
-    kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+    helm upgrade --install argocd argo/argo-cd \
+      --namespace argocd --create-namespace \
+      --set server.service.type=NodePort \
+      --set server.service.nodePortHttp=30080 \
+      --set server.service.nodePortHttps=30443 \
+      --wait
   register: argocd_install
   until: argocd_install.rc == 0
   retries: 3
