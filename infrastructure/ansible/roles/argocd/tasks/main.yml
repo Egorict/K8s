@@ -1,3 +1,4 @@
+---
 - name: Delete all ArgoCD resources (including global)
   shell: |
     kubectl delete -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml --ignore-not-found=true 2>/dev/null || true
@@ -5,19 +6,23 @@
     kubectl delete crd applications.argoproj.io appprojects.argoproj.io --ignore-not-found=true 2>/dev/null || true
     kubectl delete clusterrole argocd-application-controller argocd-applicationset-controller argocd-server argocd-redis argocd-repo-server argocd-dex-server argocd-notifications-controller --ignore-not-found=true 2>/dev/null || true
     kubectl delete clusterrolebinding argocd-application-controller argocd-applicationset-controller argocd-server --ignore-not-found=true 2>/dev/null || true
-    sleep 5
+    sleep 2
   changed_when: false
+  failed_when: false
 
 - name: Force remove existing ArgoCD Helm release (if any)
   shell: |
     helm uninstall argocd -n argocd --ignore-not-found 2>/dev/null || true
-    sleep 5
+    sleep 2
   changed_when: false
+  failed_when: false
 
 - name: Add ArgoCD Helm repo
   shell: |
-    helm repo add argo https://argoproj.github.io/argo-helm
+    helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
     helm repo update
+  register: helm_repo_add
+  changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
 
 - name: Install ArgoCD via Helm
   shell: |
@@ -26,18 +31,19 @@
       --set server.service.type=NodePort \
       --set server.service.nodePortHttp=30080 \
       --set server.service.nodePortHttps=30443 \
-      --wait
+      --wait --timeout 10m --atomic
   register: argocd_install
   until: argocd_install.rc == 0
-  retries: 3
-  delay: 10
+  retries: 2
+  delay: 5
 
 - name: Wait for all ArgoCD pods
-  shell: kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s
-  retries: 10
+  shell: kubectl wait --for=condition=ready pod --all -n argocd --timeout=600s
+  retries: 5
   delay: 10
   register: argocd_wait
   until: argocd_wait.rc == 0
+  changed_when: false
 
 - name: Get ArgoCD admin password
   shell: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
@@ -47,12 +53,6 @@
 - name: Show ArgoCD password
   debug:
     msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
-
-
-- name: Get ArgoCD admin password
-  shell: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
-  register: argocd_password
-  changed_when: false
 
 - name: Delete existing StorageClass (if any) to allow recreation with new binding mode
   shell: |
@@ -68,7 +68,6 @@
     - { name: client-app, chart_path: infrastructure/k8s/base/myapp-chart }
     - { name: server-app, chart_path: infrastructure/k8s/base/server-chart }
     - { name: database-app, chart_path: infrastructure/k8s/base/database-chart }
-
   register: app_files
 
 - name: Apply generated Applications

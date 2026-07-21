@@ -6,6 +6,7 @@
       - open-iscsi
       - nfs-common
     state: present
+    cache_valid_time: 3600   # кеш apt на 1 час
   when: ansible_os_family == "Debian"
 
 - name: Start iscsid
@@ -14,6 +15,12 @@
     name: iscsid
     state: started
     enabled: yes
+
+- name: Check if Longhorn namespace exists (to skip cleanup if absent)
+  shell: kubectl get namespace longhorn-system --ignore-not-found -o name
+  register: ns_check
+  changed_when: false
+  failed_when: false
 
 - name: Force cleanup Longhorn (webhooks + CRDs + resources + namespace)
   shell: |
@@ -42,8 +49,8 @@
     # 5. Удаляем неймспейс с таймаутом
     timeout 30 kubectl delete namespace longhorn-system --force --grace-period=0 2>/dev/null || true
     
-    # 6. Ждём максимум 30 секунд, пока неймспейс исчезнет
-    for i in {1..30}; do
+    # 6. Ждём максимум 20 секунд, пока неймспейс исчезнет
+    for i in {1..20}; do
       if ! kubectl get namespace longhorn-system &>/dev/null; then
         echo "Namespace removed"
         break
@@ -52,11 +59,18 @@
     done
   failed_when: false
   changed_when: false
-  async: 120
-  poll: 15
-  
-- name: Add Longhorn repo
-  shell: helm repo add longhorn https://charts.longhorn.io && helm repo update
+  async: 90
+  poll: 10
+  when: ns_check.stdout != ""   # выполняем очистку только если неймспейс существует
+
+- name: Add Longhorn repo (if not present)
+  shell: |
+    if ! helm repo list | grep -q longhorn; then
+      helm repo add longhorn https://charts.longhorn.io
+    fi
+    helm repo update
+  register: helm_repo_add
+  changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
 
 - name: Install Longhorn
   shell: |
@@ -66,7 +80,7 @@
       --set persistence.defaultClassReplicaCount=1 \
       --wait --timeout 15m
   register: install
-  retries: 3
+  retries: 2
   delay: 10
   until: install.rc == 0
 

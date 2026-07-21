@@ -3,6 +3,9 @@
   apt:
     name: containerd
     state: present
+    update_cache: yes
+    cache_valid_time: 3600  # кешируем apt на 1 час
+  when: ansible_os_family == "Debian"
 
 - name: Create containerd config directory
   file:
@@ -18,6 +21,7 @@
     sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
   args:
     creates: /etc/containerd/config.toml  # не перезаписывать при повторных запусках
+  register: containerd_config_created
 
 - name: Restart containerd
   systemd:
@@ -25,3 +29,4 @@
     state: restarted
     enabled: yes
     daemon_reload: yes
+  when: containerd_config_created.changed  # перезапускать только если конфиг изменился

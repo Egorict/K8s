@@ -1,9 +1,11 @@
 ---
-- name: Add Kubernetes apt repo
+- name: Add Kubernetes apt repo and GPG key
   shell: |
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    curl -fsSL --max-time 30 https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
     echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
     apt update
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg  # не перезаписывать при повторных запусках
 
 - name: Install kubeadm, kubelet, kubectl
   apt:
@@ -12,6 +14,8 @@
       - kubelet
       - kubectl
     state: present
+    update_cache: yes
+    cache_valid_time: 3600  # кешируем apt на 1 час
 
 - name: Initialize cluster
   shell: |
