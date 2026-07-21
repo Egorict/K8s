@@ -17,7 +17,7 @@
 
 - name: Force delete stuck Longhorn namespace (if exists)
   shell: |
-    kubectl delete namespace longhorn-system --force --grace-period=0 2>/dev/null || true
+    kubectl delete namespace longhorn-system || true
     sleep 5
   failed_when: false
   changed_when: false
