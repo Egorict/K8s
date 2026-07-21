@@ -1,6 +1,6 @@
 image:
   repository: ermakov880/devops-project-server
-  tag: 5929afb96b1141bc8e668e997b23e54b3082712d
+  tag: d6cc60ca98b3038baae7050f032cac3629444f79
   pullPolicy: IfNotPresent
 
 service:
