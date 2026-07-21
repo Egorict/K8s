@@ -1,31 +1,3 @@
----
-- name: Install required packages for Longhorn (open-iscsi, nfs-common)
-  become: yes
-  package:
-    name:
-      - open-iscsi
-      - nfs-common
-    state: present
-  when: ansible_os_family == "Debian"
-
-- name: Ensure iscsid service is running and enabled
-  become: yes
-  systemd:
-    name: iscsid
-    state: started
-    enabled: yes
-
-- name: Check if iscsiadm is available
-  command: which iscsiadm
-  register: iscsiadm_check
-  changed_when: false
-  failed_when: false
-
-- name: Fail if iscsiadm not found
-  fail:
-    msg: "iscsiadm not found. Please ensure open-iscsi is installed."
-  when: iscsiadm_check.rc != 0
-
 - name: Add Longhorn Helm repository
   shell: |
     helm repo add longhorn https://charts.longhorn.io
@@ -33,37 +5,37 @@
   register: helm_repo_add
   changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
 
-- name: Install Longhorn via Helm
+- name: Install Longhorn via Helm (without version pinning)
   shell: |
     helm upgrade --install longhorn longhorn/longhorn \
       --namespace longhorn-system --create-namespace \
       --set persistence.defaultClass={{ longhorn_default_storageclass }} \
       --set persistence.defaultClassReplicaCount={{ longhorn_replica_count }} \
-      {% if longhorn_version %}--version {{ longhorn_version }}{% endif %} \
       --set csi.kubeletRootDir={{ longhorn_kubelet_root_dir }} \
+      --set defaultSettings.defaultDataPath=/var/lib/longhorn \
+      --atomic \
       --wait --timeout 15m
   register: helm_install
   retries: 3
   delay: 10
   until: helm_install.rc == 0
   changed_when: true
+  when: longhorn_version is undefined or not longhorn_version
 
-- name: Wait for all Longhorn pods to be ready
+- name: Install Longhorn via Helm (with version pinning)
   shell: |
-    kubectl wait --for=condition=ready pod --all -n longhorn-system --timeout=600s
-  register: longhorn_wait
-  until: longhorn_wait.rc == 0
-  retries: 10
+    helm upgrade --install longhorn longhorn/longhorn \
+      --namespace longhorn-system --create-namespace \
+      --set persistence.defaultClass={{ longhorn_default_storageclass }} \
+      --set persistence.defaultClassReplicaCount={{ longhorn_replica_count }} \
+      --version {{ longhorn_version }} \
+      --set csi.kubeletRootDir={{ longhorn_kubelet_root_dir }} \
+      --set defaultSettings.defaultDataPath=/var/lib/longhorn \
+      --atomic \
+      --wait --timeout 15m
+  register: helm_install
+  retries: 3
   delay: 10
-  changed_when: false
-
-- name: Verify StorageClass 'longhorn' exists
-  shell: |
-    kubectl get storageclass longhorn -o name
-  register: storageclass_check
-  changed_when: false
-
-- name: Show Longhorn StorageClass info
-  debug:
-    msg: "Longhorn StorageClass is ready. Use 'storageClassName: longhorn' in your PVCs."
-  when: storageclass_check.rc == 0
+  until: helm_install.rc == 0
+  changed_when: true
+  when: longhorn_version is defined and longhorn_version
