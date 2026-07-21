@@ -15,6 +15,25 @@
     state: started
     enabled: yes
 
+- name: Force cleanup Longhorn (CRDs + namespace)
+  shell: |
+    # Удаляем все CRD Longhorn
+    kubectl get crd | grep longhorn.io | awk '{print $1}' | xargs -r kubectl delete crd --ignore-not-found --wait=false 2>/dev/null || true
+    # Удаляем финализеры у неймспейса
+    kubectl patch namespace longhorn-system -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
+    # Принудительно удаляем неймспейс
+    kubectl delete namespace longhorn-system --force --grace-period=0 2>/dev/null || true
+    # Ждём, пока неймспейс исчезнет (максимум 30 секунд)
+    for i in {1..30}; do
+      if ! kubectl get namespace longhorn-system &>/dev/null; then
+        echo "Namespace removed"
+        break
+      fi
+      sleep 1
+    done
+  failed_when: false
+  changed_when: false
+
 - name: Add Longhorn repo
   shell: helm repo add longhorn https://charts.longhorn.io && helm repo update
 
