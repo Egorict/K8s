@@ -15,15 +15,6 @@
     state: started
     enabled: yes
 
-- name: Force remove Longhorn namespace and CRDs
-  shell: |
-    kubectl patch namespace longhorn-system -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
-    kubectl delete crd -l app.kubernetes.io/name=longhorn --ignore-not-found 2>/dev/null || true
-    kubectl delete namespace longhorn-system --force --grace-period=0 2>/dev/null || true
-    sleep 10
-  failed_when: false
-  changed_when: false
-
 - name: Add Longhorn repo
   shell: helm repo add longhorn https://charts.longhorn.io && helm repo update
 
