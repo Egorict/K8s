@@ -8,6 +8,9 @@ const PORT = process.env.PORT || 8080;
 app.use(express.json());
 app.use(routes);
 
+const cors = require('cors');
+app.use(cors()); // разрешает все запросы
+
 app.get('/health', (req, res) => {
   res.send('OK 1');
 });
