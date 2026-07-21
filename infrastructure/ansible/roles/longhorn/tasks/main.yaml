@@ -15,20 +15,21 @@
     state: started
     enabled: yes
 
-- name: Force cleanup Longhorn (CRDs + webhooks + namespace)
+- name: Force cleanup Longhorn (webhooks + CRDs + resources + namespace)
   shell: |
+    set -e
     # 1. Удаляем вебхуки
     kubectl delete validatingwebhookconfiguration longhorn-webhook-validator --ignore-not-found --timeout=10s 2>/dev/null || true
     kubectl delete mutatingwebhookconfiguration longhorn-webhook-mutator --ignore-not-found --timeout=10s 2>/dev/null || true
     
-    # 2. Удаляем финализеры у CRD и удаляем CRD
-    for crd in volumeattachments.longhorn.io volumes.longhorn.io; do
-      kubectl patch crd $crd -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
-      kubectl delete crd $crd --ignore-not-found --wait=false --timeout=10s 2>/dev/null || true
+    # 2. Удаляем финализеры у всех CRD Longhorn и сами CRD
+    for crd in $(kubectl get crd -o name | grep longhorn.io); do
+      kubectl patch $crd -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
+      kubectl delete $crd --ignore-not-found --wait=false --timeout=10s 2>/dev/null || true
     done
     
-    # 3. Удаляем финализеры у оставшихся ресурсов в неймспейсе
-    for resource in volumeattachments volumes; do
+    # 3. Удаляем все ресурсы внутри неймспейса с удалением финализеров
+    for resource in $(kubectl api-resources --verbs=list --namespaced -o name | grep -E 'longhorn|volume|engine|replica'); do
       for item in $(kubectl get -n longhorn-system $resource -o name 2>/dev/null); do
         kubectl patch -n longhorn-system $item -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
         kubectl delete -n longhorn-system $item --ignore-not-found --wait=false --timeout=10s 2>/dev/null || true
@@ -41,7 +42,7 @@
     # 5. Удаляем неймспейс с таймаутом
     timeout 30 kubectl delete namespace longhorn-system --force --grace-period=0 2>/dev/null || true
     
-    # 6. Ждём максимум 30 секунд
+    # 6. Ждём максимум 30 секунд, пока неймспейс исчезнет
     for i in {1..30}; do
       if ! kubectl get namespace longhorn-system &>/dev/null; then
         echo "Namespace removed"
@@ -51,9 +52,9 @@
     done
   failed_when: false
   changed_when: false
-  async: 60
-  poll: 10
-
+  async: 120
+  poll: 15
+  
 - name: Add Longhorn repo
   shell: helm repo add longhorn https://charts.longhorn.io && helm repo update
 
