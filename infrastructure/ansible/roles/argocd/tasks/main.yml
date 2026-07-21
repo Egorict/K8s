@@ -1,3 +1,4 @@
+---
 - name: Delete all ArgoCD resources (including global)
   shell: |
     kubectl delete -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml --ignore-not-found=true 2>/dev/null || true
@@ -7,17 +8,23 @@
     kubectl delete clusterrolebinding argocd-application-controller argocd-applicationset-controller argocd-server --ignore-not-found=true 2>/dev/null || true
     sleep 5
   changed_when: false
+  failed_when: false
 
-- name: Force remove existing ArgoCD Helm release (if any)
+- name: Force remove existing ArgoCD Helm release and stuck secrets
   shell: |
     helm uninstall argocd -n argocd --ignore-not-found 2>/dev/null || true
-    sleep 5
+    kubectl delete secret -n argocd -l "owner=helm" --ignore-not-found 2>/dev/null || true
+    kubectl delete namespace argocd --ignore-not-found 2>/dev/null || true
+    sleep 10
   changed_when: false
+  failed_when: false
 
 - name: Add ArgoCD Helm repo
   shell: |
     helm repo add argo https://argoproj.github.io/argo-helm
     helm repo update
+  register: helm_repo_add
+  changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
 
 - name: Install ArgoCD via Helm
   shell: |
@@ -26,7 +33,7 @@
       --set server.service.type=NodePort \
       --set server.service.nodePortHttp=30080 \
       --set server.service.nodePortHttps=30443 \
-      --wait
+      --wait --timeout 15m
   register: argocd_install
   until: argocd_install.rc == 0
   retries: 3
@@ -48,17 +55,17 @@
   debug:
     msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
 
-
-- name: Get ArgoCD admin password
-  shell: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
-  register: argocd_password
-  changed_when: false
-
 - name: Delete existing StorageClass (if any) to allow recreation with new binding mode
   shell: |
     kubectl delete storageclass yc-network-hdd --ignore-not-found=true
   when: argocd_wait.rc == 0
   changed_when: false
+
+- name: Apply StorageClass for Yandex Cloud HDD
+  shell: |
+    kubectl apply -f {{ playbook_dir }}/../k8s/storage-class.yaml
+  when: argocd_wait.rc == 0
+  changed_when: true
 
 - name: Generate and apply ArgoCD Applications
   template:
@@ -68,7 +75,6 @@
     - { name: client-app, chart_path: infrastructure/k8s/base/myapp-chart }
     - { name: server-app, chart_path: infrastructure/k8s/base/server-chart }
     - { name: database-app, chart_path: infrastructure/k8s/base/database-chart }
-
   register: app_files
 
 - name: Apply generated Applications
