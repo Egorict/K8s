@@ -15,6 +15,13 @@
     state: started
     enabled: yes
 
+- name: Force delete stuck Longhorn namespace (if exists)
+  shell: |
+    kubectl delete namespace longhorn-system --force --grace-period=0 2>/dev/null || true
+    sleep 5
+  failed_when: false
+  changed_when: false
+
 - name: Add Longhorn repo
   shell: helm repo add longhorn https://charts.longhorn.io && helm repo update
 
@@ -32,3 +39,13 @@
 
 - name: Wait for pods
   shell: kubectl wait --for=condition=ready pod --all -n longhorn-system --timeout=300s
+
+- name: Check StorageClass
+  shell: kubectl get storageclass longhorn -o name
+  register: sc
+  failed_when: false
+
+- name: Result
+  debug:
+    msg: "Longhorn ready. Use storageClassName: longhorn"
+  when: sc.rc == 0
