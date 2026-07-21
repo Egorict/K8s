@@ -15,12 +15,6 @@
     state: started
     enabled: yes
 
-- name: Force delete stuck Longhorn namespace (if exists)
-  shell: |
-    kubectl delete namespace longhorn-system || true
-    sleep 5
-  failed_when: false
-  changed_when: false
 
 - name: Add Longhorn repo
   shell: helm repo add longhorn https://charts.longhorn.io && helm repo update
