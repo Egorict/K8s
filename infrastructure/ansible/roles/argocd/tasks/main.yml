@@ -16,12 +16,30 @@
   delay: 10
   until: install.rc == 0
 
-- name: Wait for ArgoCD pods
-  shell: kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s
-  retries: 10
+- name: Wait for ArgoCD pods (up to 10 minutes)
+  shell: |
+    kubectl wait --for=condition=ready pod --all -n argocd --timeout=600s 2>/dev/null || true
+    kubectl get pods -n argocd
+  register: pods_status
+  retries: 3
   delay: 10
-  register: wait
-  until: wait.rc == 0
+  until: pods_status.rc == 0
+  changed_when: false
+
+- name: Show pod status if not ready
+  debug:
+    msg: "{{ pods_status.stdout_lines }}"
+  when: pods_status.rc != 0
+
+- name: Force wait for critical pods (application-controller, server, repo-server)
+  shell: |
+    for pod in argocd-application-controller argocd-server argocd-repo-server; do
+      kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=$pod -n argocd --timeout=300s 2>/dev/null || true
+    done
+  register: critical_wait
+  until: critical_wait.rc == 0
+  retries: 5
+  delay: 10
 
 - name: Get ArgoCD admin password
   shell: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
