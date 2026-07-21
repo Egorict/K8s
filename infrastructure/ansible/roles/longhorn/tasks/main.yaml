@@ -19,7 +19,7 @@
   shell: |
     # Удаляем все CRD Longhorn
     kubectl get crd | grep longhorn.io | awk '{print $1}' | xargs -r kubectl delete crd --ignore-not-found --wait=false 2>/dev/null || true
-    # Удаляем финализеры у неймспейса
+    # Удаляем финализеры у  неймспейса
     kubectl patch namespace longhorn-system -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
     # Принудительно удаляем неймспейс
     kubectl delete namespace longhorn-system --force --grace-period=0 2>/dev/null || true
