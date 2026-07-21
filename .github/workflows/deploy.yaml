@@ -50,6 +50,10 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
+      # Добавляем настройку Buildx с кешем
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push client image
         uses: docker/build-push-action@v5
         with:
@@ -58,6 +62,8 @@ jobs:
           tags: |
             ${{ env.CLIENT_IMAGE_NAME }}:latest
             ${{ env.CLIENT_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build and push server image
         uses: docker/build-push-action@v5
@@ -67,6 +73,8 @@ jobs:
           tags: |
             ${{ env.SERVER_IMAGE_NAME }}:latest
             ${{ env.SERVER_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Update values.yaml files with new tag
         run: |
