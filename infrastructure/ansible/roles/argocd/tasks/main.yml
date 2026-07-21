@@ -1,51 +1,77 @@
----
-- name: Delete old ArgoCD if exists
+- name: Delete all ArgoCD resources (including global)
   shell: |
-    kubectl delete namespace argocd --ignore-not-found 2>/dev/null || true
-    kubectl delete crd applications.argoproj.io appprojects.argoproj.io applicationsets.argoproj.io --ignore-not-found 2>/dev/null || true
+    kubectl delete -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml --ignore-not-found=true 2>/dev/null || true
+    kubectl delete namespace argocd --ignore-not-found=true 2>/dev/null || true
+    kubectl delete crd applications.argoproj.io appprojects.argoproj.io --ignore-not-found=true 2>/dev/null || true
+    kubectl delete clusterrole argocd-application-controller argocd-applicationset-controller argocd-server argocd-redis argocd-repo-server argocd-dex-server argocd-notifications-controller --ignore-not-found=true 2>/dev/null || true
+    kubectl delete clusterrolebinding argocd-application-controller argocd-applicationset-controller argocd-server --ignore-not-found=true 2>/dev/null || true
     sleep 5
-  failed_when: false
   changed_when: false
 
-- name: Install ArgoCD
+- name: Force remove existing ArgoCD Helm release (if any)
   shell: |
-    kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
-    kubectl apply -n argocd --server-side=true -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-  register: install
-  retries: 3
-  delay: 10
-  until: install.rc == 0
-
-- name: Wait for ArgoCD pods (up to 10 minutes)
-  shell: |
-    kubectl wait --for=condition=ready pod --all -n argocd --timeout=600s 2>/dev/null || true
-    kubectl get pods -n argocd
-  register: pods_status
-  retries: 3
-  delay: 10
-  until: pods_status.rc == 0
+    helm uninstall argocd -n argocd --ignore-not-found 2>/dev/null || true
+    sleep 5
   changed_when: false
 
-- name: Show pod status if not ready
-  debug:
-    msg: "{{ pods_status.stdout_lines }}"
-  when: pods_status.rc != 0
-
-- name: Force wait for critical pods (application-controller, server, repo-server)
+- name: Add ArgoCD Helm repo
   shell: |
-    for pod in argocd-application-controller argocd-server argocd-repo-server; do
-      kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=$pod -n argocd --timeout=300s 2>/dev/null || true
-    done
-  register: critical_wait
-  until: critical_wait.rc == 0
-  retries: 5
+    helm repo add argo https://argoproj.github.io/argo-helm
+    helm repo update
+
+- name: Install ArgoCD via Helm
+  shell: |
+    helm upgrade --install argocd argo/argo-cd \
+      --namespace argocd --create-namespace \
+      --set server.service.type=NodePort \
+      --set server.service.nodePortHttp=30080 \
+      --set server.service.nodePortHttps=30443 \
+      --wait
+  register: argocd_install
+  until: argocd_install.rc == 0
+  retries: 3
   delay: 10
+
+- name: Wait for all ArgoCD pods
+  shell: kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s
+  retries: 10
+  delay: 10
+  register: argocd_wait
+  until: argocd_wait.rc == 0
 
 - name: Get ArgoCD admin password
   shell: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
-  register: password
+  register: argocd_password
   changed_when: false
 
-- name: Show password
+- name: Show ArgoCD password
   debug:
-    msg: "ArgoCD admin password: {{ password.stdout }}"
+    msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
+
+
+- name: Get ArgoCD admin password
+  shell: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+  register: argocd_password
+  changed_when: false
+
+- name: Delete existing StorageClass (if any) to allow recreation with new binding mode
+  shell: |
+    kubectl delete storageclass yc-network-hdd --ignore-not-found=true
+  when: argocd_wait.rc == 0
+  changed_when: false
+
+- name: Generate and apply ArgoCD Applications
+  template:
+    src: app.yaml.j2
+    dest: "/tmp/{{ item.name }}.yaml"
+  loop:
+    - { name: client-app, chart_path: infrastructure/k8s/base/myapp-chart }
+    - { name: server-app, chart_path: infrastructure/k8s/base/server-chart }
+    - { name: database-app, chart_path: infrastructure/k8s/base/database-chart }
+
+  register: app_files
+
+- name: Apply generated Applications
+  shell: kubectl apply -f {{ item.dest }}
+  loop: "{{ app_files.results }}"
+  when: argocd_wait.rc == 0
