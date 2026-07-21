@@ -1,0 +1,43 @@
+---
+- name: Add Jetstack Helm repository
+  shell: |
+    helm repo add jetstack https://charts.jetstack.io
+    helm repo update
+  register: helm_repo_add
+  changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
+
+- name: Install Cert-Manager via Helm
+  shell: |
+    helm upgrade --install cert-manager jetstack/cert-manager \
+      --namespace {{ cert_manager_namespace }} \
+      --create-namespace \
+      --set installCRDs=true \
+      --version {{ cert_manager_version }} \
+      --wait --timeout 10m
+  register: helm_install
+  retries: 3
+  delay: 10
+  until: helm_install.rc == 0
+  changed_when: true
+
+- name: Wait for Cert-Manager pods to be ready
+  shell: |
+    kubectl wait --for=condition=ready pod --all -n {{ cert_manager_namespace }} --timeout=300s
+  register: wait_pods
+  until: wait_pods.rc == 0
+  retries: 10
+  delay: 10
+  changed_when: false
+
+- name: Create ClusterIssuer (Let's Encrypt)
+  template:
+    src: cluster-issuer.yaml.j2
+    dest: /tmp/cluster-issuer.yaml
+  vars:
+    email: "{{ cert_manager_email }}"
+
+- name: Apply ClusterIssuer
+  shell: |
+    kubectl apply -f /tmp/cluster-issuer.yaml
+  register: apply_issuer
+  changed_when: '"created" in apply_issuer.stdout or "configured" in apply_issuer.stdout'

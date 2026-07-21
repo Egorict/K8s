@@ -1,0 +1,6 @@
+---
+ingress_nginx_namespace: ingress-nginx
+ingress_nginx_version: "4.11.3"   # актуальная версия Helm-чарта
+ingress_nginx_service_type: NodePort   # для локального теста; для облака можно LoadBalancer
+ingress_nginx_http_port: 30080
+ingress_nginx_https_port: 30443

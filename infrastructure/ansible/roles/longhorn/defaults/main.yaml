@@ -1,0 +1,12 @@
+---
+# Количество реплик для StorageClass Longhorn (для одной ноды - 1)
+longhorn_replica_count: 1
+
+# Использовать Longhorn как StorageClass по умолчанию
+longhorn_default_storageclass: true
+
+# Версия Longhorn (оставьте пустым для latest)
+longhorn_version: ""
+
+# Путь к корневой директории kubelet (обычно /var/lib/kubelet)
+longhorn_kubelet_root_dir: "/var/lib/kubelet"

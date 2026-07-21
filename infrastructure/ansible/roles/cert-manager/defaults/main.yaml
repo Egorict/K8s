@@ -1,0 +1,4 @@
+---
+cert_manager_namespace: cert-manager
+cert_manager_version: "1.15.3"   # актуальная версия Helm-чарта
+cert_manager_email: "admin@example.com"   # замените на ваш email

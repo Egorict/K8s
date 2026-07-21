@@ -13,6 +13,9 @@
     - kubernetes
     - cni
     - helm
-    - argocd
     - longhorn 
+   # - cert-manager
+   # - nginx-ingress
+    - argocd
+    
 #    - yandex
