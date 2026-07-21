@@ -15,13 +15,12 @@
     state: started
     enabled: yes
 
-- name: Force delete stuck Longhorn namespace and wait for removal
+- name: Force remove Longhorn namespace and CRDs
   shell: |
+    kubectl patch namespace longhorn-system -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
+    kubectl delete crd -l app.kubernetes.io/name=longhorn --ignore-not-found 2>/dev/null || true
     kubectl delete namespace longhorn-system --force --grace-period=0 2>/dev/null || true
-    while kubectl get namespace longhorn-system 2>/dev/null; do
-      echo "Waiting for namespace to be removed..."
-      sleep 2
-    done
+    sleep 10
   failed_when: false
   changed_when: false
 
