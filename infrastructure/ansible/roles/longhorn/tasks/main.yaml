@@ -29,10 +29,15 @@
 - name: Ensure old Longhorn release is removed (if failed)
   shell: |
     helm uninstall longhorn -n longhorn-system --ignore-not-found 2>/dev/null || true
-    kubectl delete namespace longhorn-system --ignore-not-found 2>/dev/null || true
+    # Удаляем только если неймспейс висит в Terminating (принудительно)
+    if kubectl get namespace longhorn-system -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Terminating; then
+      kubectl delete namespace longhorn-system --force --grace-period=0 2>/dev/null || true
+    fi
   changed_when: false
   failed_when: false
-
+  async: 60
+  poll: 10
+  
 - name: Add Longhorn Helm repository
   shell: |
     helm repo add longhorn https://charts.longhorn.io
