@@ -33,7 +33,7 @@
       --set server.service.type=NodePort \
       --set server.service.nodePortHttp=30080 \
       --set server.service.nodePortHttps=30443 \
-      --wait --timeout 15m
+      --wait --timeout 25m
   register: argocd_install
   until: argocd_install.rc == 0
   retries: 3
