@@ -5,8 +5,10 @@ on:
     branches: [ master, main ]
 
 env:
-  IMAGE_NAME: ermakov880/devops-project-server          # ← заменили на серверный образ
-  VALUES_FILE: infrastructure/k8s/base/server-chart/values.yaml   # ← заменили на серверный values
+  SERVER_IMAGE_NAME: ermakov880/devops-project-server
+  SERVER_VALUES_FILE: infrastructure/k8s/base/server-chart/values.yaml
+  CLIENT_IMAGE_NAME: ermakov880/devops-project
+  CLIENT_VALUES_FILE: infrastructure/k8s/base/myapp-chart/values.yaml
 
 jobs:
   # 1. Развернуть инфраструктуру (один раз или при изменениях)
@@ -54,8 +56,8 @@ jobs:
           context: ./apps/client
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.CLIENT_IMAGE_NAME }}:latest
+            ${{ env.CLIENT_IMAGE_NAME }}:${{ github.sha }}
 
       - name: Build and push server image
         uses: docker/build-push-action@v5
@@ -63,21 +65,24 @@ jobs:
           context: ./apps/server
           push: true
           tags: |
-            ermakov880/devops-project-server:latest
-            ermakov880/devops-project-server:${{ github.sha }}    
+            ${{ env.SERVER_IMAGE_NAME }}:latest
+            ${{ env.SERVER_IMAGE_NAME }}:${{ github.sha }}
 
-      - name: Update values.yaml with new tag
+      - name: Update values.yaml files with new tag
         run: |
-          sed -i "s|tag:.*|tag: ${{ github.sha }}|" ${{ env.VALUES_FILE }}
-          cat ${{ env.VALUES_FILE }}
+          sed -i "s|tag:.*|tag: ${{ github.sha }}|" ${{ env.SERVER_VALUES_FILE }}
+          sed -i "s|tag:.*|tag: ${{ github.sha }}|" ${{ env.CLIENT_VALUES_FILE }}
+          echo "=== Server values ===" && cat ${{ env.SERVER_VALUES_FILE }}
+          echo "=== Client values ===" && cat ${{ env.CLIENT_VALUES_FILE }}
 
       - name: Commit and push changes to values.yaml
         if: github.event_name == 'push'
         run: |
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git add ${{ env.VALUES_FILE }}
-          git diff --staged --quiet || git commit -m "Update image tag to ${{ github.sha }} [skip ci]"
+          git add ${{ env.SERVER_VALUES_FILE }}
+          git add ${{ env.CLIENT_VALUES_FILE }}
+          git diff --staged --quiet || git commit -m "Update image tags to ${{ github.sha }} [skip ci]"
           git push
         env:
-          GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}   # используемф sPAT дл я пуша
+          GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}

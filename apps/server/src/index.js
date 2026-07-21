@@ -9,7 +9,7 @@ app.use(express.json());
 app.use(routes);
 
 app.get('/health', (req, res) => {
-  res.send('OK');
+  res.send('OK 1');
 });
 
 const start = async () => {

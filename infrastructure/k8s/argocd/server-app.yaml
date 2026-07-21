@@ -8,7 +8,7 @@ spec:
   source:
     repoURL: https://github.com/Egorict/K8s.git
     targetRevision: HEAD
-    path: infrastructure/k8s/charts/server
+    path: infrastructure/k8s/base/server-chart
   destination:
     server: https://kubernetes.default.svc
     namespace: default
