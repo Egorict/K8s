@@ -53,7 +53,7 @@ jobs:
       - name: Build and push client image
         uses: docker/build-push-action@v5
         with:
-          context: ./apps/client/heart
+          context: ./apps/client
           push: true
           tags: |
             ${{ env.CLIENT_IMAGE_NAME }}:latest
