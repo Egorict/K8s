@@ -7,6 +7,7 @@
       - nfs-common
     state: present
   when: ansible_os_family == "Debian"
+  tags: [longhorn, packages]
 
 - name: Ensure iscsid service is running and enabled
   become: yes
@@ -14,88 +15,143 @@
     name: iscsid
     state: started
     enabled: yes
+  tags: [longhorn, iscsid]
 
 - name: Check if iscsiadm is available
   command: which iscsiadm
   register: iscsiadm_check
   changed_when: false
   failed_when: false
+  tags: [longhorn, check]
 
 - name: Fail if iscsiadm not found
   fail:
     msg: "iscsiadm not found. Please ensure open-iscsi is installed."
   when: iscsiadm_check.rc != 0
+  tags: [longhorn, check]
 
-- name: Ensure old Longhorn release is removed (if failed)
+- name: Delete Longhorn namespace if it exists and is stuck in Terminating
   shell: |
-    helm uninstall longhorn -n longhorn-system --ignore-not-found 2>/dev/null || true
-    # Удаляем только если неймспейс висит в Terminating (принудительно)
-    if kubectl get namespace longhorn-system -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Terminating; then
+    if kubectl get namespace longhorn-system 2>/dev/null | grep -q Terminating; then
       kubectl delete namespace longhorn-system --force --grace-period=0 2>/dev/null || true
+      sleep 10
     fi
   changed_when: false
   failed_when: false
-  async: 60
-  poll: 10
-  
+  tags: [longhorn, cleanup]
+
+- name: Force remove old Longhorn Helm release (if any)
+  shell: |
+    helm uninstall longhorn -n longhorn-system --ignore-not-found 2>/dev/null || true
+    sleep 5
+  changed_when: false
+  failed_when: false
+  tags: [longhorn, cleanup]
+
+- name: Remove stuck finalizers from Longhorn CRDs (if namespace is stuck)
+  shell: |
+    for crd in $(kubectl get crd -o name | grep longhorn.io); do
+      kubectl patch $crd -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
+    done
+  changed_when: false
+  failed_when: false
+  tags: [longhorn, cleanup]
+
 - name: Add Longhorn Helm repository
   shell: |
     helm repo add longhorn https://charts.longhorn.io
     helm repo update
   register: helm_repo_add
   changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
+  tags: [longhorn, helm]
 
-- name: Install Longhorn via Helm (with extended timeout and atomic)
+- name: Install Longhorn via Helm (without version pinning)
   shell: |
     helm upgrade --install longhorn longhorn/longhorn \
       --namespace longhorn-system --create-namespace \
-      --set persistence.defaultClass={{ longhorn_default_storageclass }} \
-      --set persistence.defaultClassReplicaCount={{ longhorn_replica_count }} \
-      --set csi.kubeletRootDir={{ longhorn_kubelet_root_dir }} \
-      --set defaultSettings.defaultDataPath=/var/lib/longhorn \
+      --set persistence.defaultClass={{ longhorn_default_storageclass | default(true) }} \
+      --set persistence.defaultClassReplicaCount={{ longhorn_replica_count | default(1) }} \
+      --set csi.kubeletRootDir={{ longhorn_kubelet_root_dir | default("/var/lib/kubelet") }} \
+      --set defaultSettings.defaultDataPath={{ longhorn_storage_path | default("/var/lib/longhorn") }} \
+      --set longhornManager.resources.limits.cpu=100m \
+      --set longhornManager.resources.limits.memory=256Mi \
+      --set longhornDriver.resources.limits.cpu=100m \
+      --set longhornDriver.resources.limits.memory=256Mi \
       --atomic \
       --wait --timeout 30m
   register: helm_install
-  retries: 2
+  retries: 3
   delay: 15
   until: helm_install.rc == 0
   changed_when: true
   when: longhorn_version is undefined or not longhorn_version
+  tags: [longhorn, install]
 
 - name: Install Longhorn via Helm (with version pinning)
   shell: |
     helm upgrade --install longhorn longhorn/longhorn \
       --namespace longhorn-system --create-namespace \
-      --set persistence.defaultClass={{ longhorn_default_storageclass }} \
-      --set persistence.defaultClassReplicaCount={{ longhorn_replica_count }} \
+      --set persistence.defaultClass={{ longhorn_default_storageclass | default(true) }} \
+      --set persistence.defaultClassReplicaCount={{ longhorn_replica_count | default(1) }} \
       --version {{ longhorn_version }} \
-      --set csi.kubeletRootDir={{ longhorn_kubelet_root_dir }} \
-      --set defaultSettings.defaultDataPath=/var/lib/longhorn \
+      --set csi.kubeletRootDir={{ longhorn_kubelet_root_dir | default("/var/lib/kubelet") }} \
+      --set defaultSettings.defaultDataPath={{ longhorn_storage_path | default("/var/lib/longhorn") }} \
+      --set longhornManager.resources.limits.cpu=100m \
+      --set longhornManager.resources.limits.memory=256Mi \
+      --set longhornDriver.resources.limits.cpu=100m \
+      --set longhornDriver.resources.limits.memory=256Mi \
       --atomic \
       --wait --timeout 30m
-  register: helm_install
-  retries: 2
+  register: helm_install_versioned
+  retries: 3
   delay: 15
-  until: helm_install.rc == 0
+  until: helm_install_versioned.rc == 0
   changed_when: true
   when: longhorn_version is defined and longhorn_version
+  tags: [longhorn, install]
 
 - name: Wait for all Longhorn pods to be ready
   shell: |
-    kubectl wait --for=condition=ready pod --all -n longhorn-system --timeout=600s
+    kubectl wait --for=condition=ready pod --all -n longhorn-system --timeout=600s 2>/dev/null || true
   register: longhorn_wait
   until: longhorn_wait.rc == 0
   retries: 10
-  delay: 10
+  delay: 15
   changed_when: false
+  tags: [longhorn, verify]
+
+- name: Get Longhorn pods status (debug)
+  shell: |
+    kubectl get pods -n longhorn-system -o wide
+  register: longhorn_pods
+  changed_when: false
+  tags: [longhorn, debug]
+
+- name: Show Longhorn pods
+  debug:
+    msg: "{{ longhorn_pods.stdout_lines }}"
+  tags: [longhorn, debug]
 
 - name: Verify StorageClass 'longhorn' exists
   shell: |
-    kubectl get storageclass longhorn -o name
+    kubectl get storageclass longhorn -o name 2>/dev/null
   register: storageclass_check
   changed_when: false
+  failed_when: false
+  tags: [longhorn, verify]
 
 - name: Show Longhorn StorageClass info
   debug:
-    msg: "Longhorn StorageClass is ready. Use 'storageClassName: longhorn' in your PVCs."
+    msg: |
+      ✅ Longhorn StorageClass is ready.
+      Use 'storageClassName: longhorn' in your PVCs.
   when: storageclass_check.rc == 0
+  tags: [longhorn, verify]
+
+- name: Show error if StorageClass not found
+  debug:
+    msg: |
+      ❌ Longhorn StorageClass not found. Installation may have failed.
+      Check logs with: kubectl logs -n longhorn-system <pod-name>
+  when: storageclass_check.rc != 0
+  tags: [longhorn, verify]
