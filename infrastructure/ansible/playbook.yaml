@@ -13,7 +13,7 @@
     - kubernetes
     - cni
     - helm
-  #  - longhorn 
+  #  - longhorn  
    # - cert-manager 
    # - nginx-ingress
     - argocd
