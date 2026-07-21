@@ -8,11 +8,14 @@
     sleep 5
   changed_when: false
 
-- name: Force remove existing ArgoCD Helm release (if any)
+- name: Force remove existing ArgoCD Helm release and stuck secrets
   shell: |
     helm uninstall argocd -n argocd --ignore-not-found 2>/dev/null || true
-    sleep 5
+    kubectl delete secret -n argocd --field-selector type=helm.sh/release.v1 --ignore-not-found 2>/dev/null || true
+    kubectl delete namespace argocd --ignore-not-found 2>/dev/null || true
+    sleep 10
   changed_when: false
+  failed_when: false
 
 - name: Add ArgoCD Helm repo
   shell: |
@@ -26,11 +29,11 @@
       --set server.service.type=NodePort \
       --set server.service.nodePortHttp=30080 \
       --set server.service.nodePortHttps=30443 \
-      --wait
+      --wait --timeout 15m --atomic
   register: argocd_install
   until: argocd_install.rc == 0
-  retries: 3
-  delay: 10
+  retries: 5
+  delay: 15
 
 - name: Wait for all ArgoCD pods
   shell: kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s
