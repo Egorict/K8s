@@ -11,7 +11,7 @@ env:
   CLIENT_VALUES_FILE: infrastructure/k8s/base/myapp-chart/values.yaml
 
 jobs:
-  # 1. Развернуть инфраструктуру (один раз или при изменениях)
+  # 1. Развернуть инфраструктуру ( один раз или при изменениях)
   infra:
     runs-on: ubuntu-latest
     steps:
