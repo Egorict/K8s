@@ -61,7 +61,9 @@
   changed_when: false
   async: 90
   poll: 10
-  when: ns_check.stdout != ""   # выполняем очистку только если неймспейс существует
+  when:
+    - ns_check.stdout != ""
+    - longhorn_force_reset | default(false) | bool   # только по явному запросу, не на каждом прогоне
 
 - name: Add Longhorn repo (if not present)
   shell: |
