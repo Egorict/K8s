@@ -6,7 +6,7 @@ image:
 service:
   type: NodePort   # было ClusterIP
   port: 8080
-  nodePort: 30082  # опционально, можно не указывать — Kubernetes назначит сам
+  nodePort: 30082  # опционально, можно не ук азывать — Kubernetes назначит сам
 
 resources:
   limits:
