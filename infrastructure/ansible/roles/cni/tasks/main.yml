@@ -74,8 +74,22 @@
         name: default
       spec: {}
 
+- name: Wait for Tigera CRDs to be established
+  shell: |
+    kubectl --kubeconfig {{ kubeconfig_path }} wait --for=condition=Established crd/installations.operator.tigera.io --timeout=60s
+    kubectl --kubeconfig {{ kubeconfig_path }} wait --for=condition=Established crd/apiservers.operator.tigera.io --timeout=60s
+  register: crd_wait
+  until: crd_wait.rc == 0
+  retries: 10
+  delay: 5
+  changed_when: false
+
 - name: Apply Calico Installation
   shell: kubectl --kubeconfig {{ kubeconfig_path }} apply -f /tmp/calico-installation.yaml
+  register: calico_apply
+  until: calico_apply.rc == 0
+  retries: 6
+  delay: 10
 
 - name: Wait for Calico node pods to be ready
   shell: kubectl --kubeconfig {{ kubeconfig_path }} wait --for=condition=ready pod -l k8s-app=calico-node -n calico-system --timeout=300s
