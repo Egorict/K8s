@@ -14,7 +14,7 @@
     - cni
     - helm
     - longhorn   
-   #  - cert-manager    ./   
+   #  - cert-manager    ./    
    # - nginx-ingress
     - argocd
     
