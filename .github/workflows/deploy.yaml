@@ -64,8 +64,7 @@ jobs:
             fi
             cd K8s
             git pull origin master
-            ansible-playbook infrastructure/ansible/playbook.yaml -c local -i localhost, ${{ github.event.inputs.longhorn_force_reset == 'true' && '-e longhorn_force_reset=true' || '' }} \
-              ${{ github.event.inputs.argocd_force_reset == 'true' && '-e argocd_force_reset=true' || '' }}
+            ansible-playbook infrastructure/ansible/playbook.yaml -c local -i localhost, ${{ github.event.inputs.longhorn_force_reset == 'true' && '-e longhorn_force_reset=true' || '' }} ${{ github.event.inputs.argocd_force_reset == 'true' && '-e argocd_force_reset=true' || '' }}
 
   # 2. Сборка образов и обновление Helm-чарта. Запускается ТОЛЬКО если менялся
   #    код приложения (apps/**), и НЕ зависит от джобы infra — они полностью
