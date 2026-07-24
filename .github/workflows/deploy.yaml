@@ -3,6 +3,12 @@ name: Deploy to Kubernetes
 on:
   push:
     branches: [ master, main ]
+  workflow_dispatch:
+    inputs:
+      longhorn_force_reset:
+        description: "Force full Longhorn reinstall (destructive! wipes existing volumes)"
+        type: boolean
+        default: false
 
 env:
   SERVER_IMAGE_NAME: ermakov880/devops-project-server
@@ -11,8 +17,30 @@ env:
   CLIENT_VALUES_FILE: infrastructure/k8s/base/myapp-chart/values.yaml
 
 jobs:
-  # 1. Развернуть инфраструктуру ( один раз или при изменениях)
+  # 0. Определяем, что именно поменялось в пуше — от этого зависит,
+  #    какие из независимых джоб ниже вообще нужно запускать.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.filter.outputs.infra }}
+      app: ${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            infra:
+              - 'infrastructure/ansible/**'
+            app:
+              - 'apps/**'
+
+  # 1. Инфраструктура кластера (Ansible). Запускается ТОЛЬКО если менялись
+  #    файлы в infrastructure/ansible/**, либо если запущено вручную.
+  #    Больше не выполняется на каждый пуш с правкой в коде приложения.
   infra:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,12 +60,16 @@ jobs:
             fi
             cd K8s
             git pull origin master
-            ansible-playbook infrastructure/ansible/playbook.yaml -c local -i localhost,
+            ansible-playbook infrastructure/ansible/playbook.yaml -c local -i localhost, \
+              ${{ github.event.inputs.longhorn_force_reset == 'true' && '-e longhorn_force_reset=true' || '' }}
 
-  # 2. Сборка образа и обновление Helm-чарта
+  # 2. Сборка образов и обновление Helm-чарта. Запускается ТОЛЬКО если менялся
+  #    код приложения (apps/**), и НЕ зависит от джобы infra — они полностью
+  #    независимы и могут идти в разных пушах, не блокируя друг друга.
   build:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
-    needs: infra
     steps:
       - uses: actions/checkout@v4
         with:
