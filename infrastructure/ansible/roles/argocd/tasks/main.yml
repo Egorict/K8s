@@ -9,6 +9,7 @@
     sleep 2
   changed_when: false
   failed_when: false
+  when: argocd_force_reset | default(false) | bool   # только по явному запросу, не на каждом прогоне
 
 - name: Force remove existing ArgoCD Helm release (if any)
   shell: |
@@ -16,6 +17,7 @@
     sleep 2
   changed_when: false
   failed_when: false
+  when: argocd_force_reset | default(false) | bool
 
 - name: Add ArgoCD Helm repo
   shell: |
@@ -60,17 +62,7 @@
   when: argocd_wait.rc == 0
   changed_when: false
 
-- name: Generate and apply ArgoCD Applications
-  template:
-    src: app.yaml.j2
-    dest: "/tmp/{{ item.name }}.yaml"
-  loop:
-    - { name: client-app, chart_path: infrastructure/k8s/base/myapp-chart }
-    - { name: server-app, chart_path: infrastructure/k8s/base/server-chart }
-    - { name: database-app, chart_path: infrastructure/k8s/base/database-chart }
-  register: app_files
-
-- name: Apply generated Applications
-  shell: kubectl apply -f {{ item.dest }}
-  loop: "{{ app_files.results }}"
+- name: Bootstrap root Application (app of apps)
+  shell: kubectl apply -f {{ playbook_dir }}/../k8s/argocd/root-app.yaml
   when: argocd_wait.rc == 0
+  changed_when: true
