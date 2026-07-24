@@ -39,8 +39,15 @@
   retries: 2
   delay: 5
 
-- name: Wait for all ArgoCD pods
-  shell: kubectl wait --for=condition=ready pod --all -n argocd --timeout=600s
+- name: Wait for all ArgoCD workloads to roll out
+  shell: |
+    set -e
+    for d in $(kubectl get deployment -n argocd -o name); do
+      kubectl rollout status "$d" -n argocd --timeout=300s
+    done
+    for s in $(kubectl get statefulset -n argocd -o name); do
+      kubectl rollout status "$s" -n argocd --timeout=300s
+    done
   retries: 5
   delay: 10
   register: argocd_wait
