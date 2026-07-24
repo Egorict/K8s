@@ -1,0 +1,16 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: myapp-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: myapp
+  policyTypes:
+    - Ingress
+  ingress:
+    # Трафик приходит снаружи кластера через NodePort — источник не под, поэтому
+    # "from" не указываем: разрешаем на этот порт с любого адреса.
+    - ports:
+        - protocol: TCP
+          port: 80

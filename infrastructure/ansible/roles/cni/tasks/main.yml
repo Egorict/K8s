@@ -12,19 +12,75 @@
   delay: 5
   changed_when: false
 
-- name: Download Flannel manifest locally (if not exists)
+# Flannel не поддерживает NetworkPolicy — переходим на Calico (через Tigera operator),
+# чтобы сетевая изоляция между приложениями реально работала.
+- name: Remove Flannel (if previously installed)
+  shell: |
+    kubectl --kubeconfig {{ kubeconfig_path }} delete -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml --ignore-not-found=true 2>/dev/null || true
+  changed_when: false
+  failed_when: false
+
+- name: Remove stale Flannel CNI config and interfaces on the node
+  shell: |
+    rm -f /etc/cni/net.d/*flannel*
+    ip link delete flannel.1 2>/dev/null || true
+    ip link delete cni0 2>/dev/null || true
+  changed_when: false
+  failed_when: false
+
+- name: Download Tigera Calico operator manifest
   get_url:
-    url: https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-    dest: /tmp/kube-flannel.yml
+    url: https://raw.githubusercontent.com/projectcalico/calico/v3.31.6/manifests/tigera-operator.yaml
+    dest: /tmp/tigera-operator.yaml
     timeout: 15
-  register: flannel_download
-  until: flannel_download is succeeded
+  register: operator_download
+  until: operator_download is succeeded
   retries: 3
   delay: 5
 
-- name: Install Flannel (using local manifest)
-  shell: |
-    kubectl apply -f /tmp/kube-flannel.yml
-  environment:
-    KUBECONFIG: "{{ kubeconfig_path }}"
-  when: flannel_download is succeeded
+- name: Install Tigera Calico operator
+  shell: kubectl --kubeconfig {{ kubeconfig_path }} apply -f /tmp/tigera-operator.yaml
+  when: operator_download is succeeded
+
+- name: Wait for Tigera operator to be ready
+  shell: kubectl --kubeconfig {{ kubeconfig_path }} wait --for=condition=available deployment/tigera-operator -n tigera-operator --timeout=180s
+  register: operator_wait
+  until: operator_wait.rc == 0
+  retries: 10
+  delay: 10
+  changed_when: false
+
+# CIDR пула Calico ОБЯЗАН совпадать с --pod-network-cidr, который передали в kubeadm init
+# (см. playbook.yaml -> vars.pod_network_cidr). Несовпадение сломает маршрутизацию подов.
+- name: Render Calico Installation custom resource
+  copy:
+    dest: /tmp/calico-installation.yaml
+    content: |
+      apiVersion: operator.tigera.io/v1
+      kind: Installation
+      metadata:
+        name: default
+      spec:
+        calicoNetwork:
+          ipPools:
+            - cidr: {{ pod_network_cidr }}
+              encapsulation: VXLANCrossSubnet
+              natOutgoing: Enabled
+              nodeSelector: all()
+      ---
+      apiVersion: operator.tigera.io/v1
+      kind: APIServer
+      metadata:
+        name: default
+      spec: {}
+
+- name: Apply Calico Installation
+  shell: kubectl --kubeconfig {{ kubeconfig_path }} apply -f /tmp/calico-installation.yaml
+
+- name: Wait for Calico node pods to be ready
+  shell: kubectl --kubeconfig {{ kubeconfig_path }} wait --for=condition=ready pod -l k8s-app=calico-node -n calico-system --timeout=300s
+  register: calico_wait
+  until: calico_wait.rc == 0
+  retries: 10
+  delay: 15
+  changed_when: false

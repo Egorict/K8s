@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres
-  namespace: default
+  namespace: {{ .Release.Namespace }}
 spec:
   replicas: 1
   strategy:
@@ -32,6 +32,13 @@ spec:
                   key: POSTGRES_PASSWORD
             - name: POSTGRES_DB
               value: "mydb"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           volumeMounts:
             - name: postgres-storage
               mountPath: /var/lib/postgresql/data

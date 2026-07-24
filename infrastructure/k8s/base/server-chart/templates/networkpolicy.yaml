@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "server.fullname" . }}-network-policy
+  labels:
+    {{- include "server.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "server.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Только клиент имеет право дёргать API сервера напрямую.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: myapp
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}

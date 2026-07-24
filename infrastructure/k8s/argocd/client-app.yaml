@@ -11,7 +11,7 @@ spec:
     path: infrastructure/k8s/base/myapp-chart
   destination:
     server: https://kubernetes.default.svc
-    namespace: default
+    namespace: app
   syncPolicy:
     automated:
       prune: true
