@@ -86,9 +86,6 @@
   delay: 10
   until: install.rc == 0
 
-- name: Wait for pods
-  shell: kubectl wait --for=condition=ready pod --all -n longhorn-system --timeout=300s
-
 - name: Check StorageClass
   shell: kubectl get storageclass longhorn -o name
   register: sc
