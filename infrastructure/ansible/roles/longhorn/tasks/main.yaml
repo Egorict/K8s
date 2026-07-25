@@ -74,6 +74,24 @@
   register: helm_repo_add
   changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
 
+# Guard против ловушки Helm "has no deployed releases": если релиз существует,
+# но НЕ в статусе deployed (failed/pending от прерванной первой установки),
+# helm upgrade --install из него выбраться не может. Сносим битый релиз заранее,
+# чтобы следующий шаг сделал чистую установку. На здоровом (deployed) релизе
+# и на отсутствующем релизе этот шаг ничего не делает.
+- name: Get Longhorn release status (if any)
+  shell: helm status longhorn -n longhorn-system --output json
+  register: lh_status
+  changed_when: false
+  failed_when: false
+
+- name: Remove broken Longhorn release before install
+  shell: helm uninstall longhorn -n longhorn-system --no-hooks
+  when:
+    - lh_status.rc == 0
+    - '"deployed" not in (lh_status.stdout | from_json).info.status'
+  changed_when: true
+
 - name: Install Longhorn
   shell: |
     helm upgrade --install longhorn longhorn/longhorn \
