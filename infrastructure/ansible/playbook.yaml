@@ -15,7 +15,7 @@
     - helm
     - longhorn   
    #  - cert-manager    ./     
-   # - nginx-ingress 
+   # - nginx-ingr ess 
     - argocd
     
 #    - yandex
