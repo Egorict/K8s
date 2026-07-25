@@ -233,7 +233,9 @@
 <script>
     (function() {
         // --- Конфигурация ---
-        const API_URL = 'http://84.201.138.176:30082/api/data';
+        // Относительный путь: браузер обращается к тому же origin (клиенту),
+        // а nginx проксирует /api на сервер внутри кластера. Никаких хардкод-IP и CORS.
+        const API_URL = '/api/data';
 
         // --- DOM-элементы ---
         const form = document.getElementById('createForm');

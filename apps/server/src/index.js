@@ -5,17 +5,9 @@ const routes = require('./routes');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// ----- CORS middleware (ДО ВСЕХ ОСТАЛЬНЫХ МАРШРУТОВ) -----
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  next();
-});
-// ---------------------------------------------------------
+// CORS не нужен: сервер это ClusterIP, снаружи недоступен. Браузер обращается
+// к API через nginx клиента на том же origin (/api), поэтому запросы same-origin.
+// Единственный клиент сервера — nginx (server-to-server), где CORS неприменим.
 
 app.use(express.json());
 app.use(routes);

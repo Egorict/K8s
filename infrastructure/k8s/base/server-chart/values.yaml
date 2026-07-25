@@ -4,9 +4,11 @@ image:
   pullPolicy: IfNotPresent
 
 service:
-  type: NodePort   # было ClusterIP
+  # ClusterIP: сервер доступен ТОЛЬКО внутри кластера. Снаружи к нему не попасть —
+  # трафик идёт через nginx клиента (reverse proxy на /api), а NetworkPolicy
+  # дополнительно пускает к серверу только поды с label app: myapp.
+  type: ClusterIP
   port: 8080
-  nodePort: 30082  # опциональ но, можно не ук азывать — Kubernetes назначит сам
 
 resources:
   limits:
