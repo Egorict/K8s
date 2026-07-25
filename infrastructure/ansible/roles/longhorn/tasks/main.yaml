@@ -63,7 +63,7 @@
   poll: 10
   when:
     - ns_check.stdout != ""
-    - longhorn_force_reset | default(false) | bool   # только по явному запросу, не на каждом прогоне
+    - longhorn_force_reset | default(false) | bool    # только по явному запросу, не на каждом прогоне
 
 - name: Add Longhorn repo (if not present)
   shell: |
