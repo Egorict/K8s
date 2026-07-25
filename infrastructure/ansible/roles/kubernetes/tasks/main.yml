@@ -23,6 +23,18 @@
   args:
     creates: /etc/kubernetes/admin.conf
 
+# На single-node кластере control-plane нода ОБЯЗАНА принимать рабочие нагрузки,
+# иначе поды висят Pending (нет worker-нод). Снимаем тейнт, который kubeadm вешает
+# по умолчанию. При переходе на multi-node выставьте single_node=false в playbook.yaml,
+# чтобы нагрузки шли на worker-ноды, а не на control-plane.
+- name: Remove control-plane taint (single-node cluster only)
+  shell: |
+    kubectl --kubeconfig /etc/kubernetes/admin.conf taint nodes --all \
+      node-role.kubernetes.io/control-plane- --overwrite 2>/dev/null || true
+  register: taint_removal
+  changed_when: "'untainted' in taint_removal.stdout"
+  when: single_node | default(true) | bool
+
 - name: Create .kube directory for root
   file:
     path: /root/.kube

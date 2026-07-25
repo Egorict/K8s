@@ -6,6 +6,8 @@
     kubernetes_version: "1.28"
     pod_network_cidr: "10.244.0.0/16"
     user_name: "user"
+    single_node: true   # single-node: снимаем control-plane taint, чтобы нагрузки шедулились.
+                        # При добавлении worker-нод поставьте false.
 
   roles:
     - common
@@ -14,7 +16,7 @@
     - cni
     - helm
     - longhorn   
-   #  - cert-manager    ./         
+   #  - cert-manager    ./          
    # - nginx-ingr ess  
     - argocd
     
