@@ -17,7 +17,7 @@
     - helm
     - longhorn
    #  - cert-manager    ./  
-   # - nginx-ingr ess 
+   # - nginx-ingr ess  
     - argocd
     - monitoring
 

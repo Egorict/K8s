@@ -15,14 +15,15 @@ spec:
       labels:
         app: postgres
     spec:
-      # uid/gid 999 — пользователь postgres в официальном образе. fsGroup обязателен:
-      # без него kubelet не сменит владельца тома Longhorn, и непривилегированный
-      # процесс не сможет писать в PGDATA.
+      # uid/gid 70 — пользователь postgres именно в ALPINE-варианте образа
+      # (в Debian-варианте он 999 — не перепутать при смене базового образа).
+      # fsGroup обязателен: без него kubelet не сменит владельца тома Longhorn,
+      # и непривилегированный процесс не сможет писать в PGDATA.
       securityContext:
         runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 999
-        fsGroup: 999
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
       containers:
