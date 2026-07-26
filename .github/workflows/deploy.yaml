@@ -46,6 +46,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.infra == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 75   # чуть больше command_timeout ниже — страховка от зависания
     steps:
       - uses: actions/checkout@v4
       - name: Deploy K8s infrastructure via Ansible
@@ -54,6 +55,10 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          # Дефолт command_timeout у ssh-action = 10m, а весь плейбук (Calico +
+          # Longhorn --timeout 25m + ArgoCD 10m + monitoring 15m) в худшем случае
+          # идёт заметно дольше. Иначе SSH убивает ansible на середине.
+          command_timeout: 60m
           script: |
             if ! command -v ansible-playbook &> /dev/null; then
               sudo apt update && sudo apt install -y ansible
