@@ -2,7 +2,13 @@ replicaCount: 1
 image:
   repository: ermakov880/devops-project
   tag: 736fdd538517bf67ff56a763d74b0f4a709f1996
-  pullPolicy: Always
+  # IfNotPresent, а не Always: CI деплоит по неизменяемому тегу — git SHA
+  # (см. deploy.yaml, шаг "Update values.yaml files with new tag"). Такой тег
+  # однозначно определяет содержимое образа, поэтому перепроверять реестр при
+  # каждом старте пода незачем. Always добавил бы зависимость от доступности
+  # Docker Hub: при недоступности/rate-limit под не стартует, даже если образ
+  # уже лежит на ноде. Новый SHA всё равно скачается — его локально нет.
+  pullPolicy: IfNotPresent
 service:
   type: NodePort
   port: 80
