@@ -16,7 +16,7 @@
     - cni
     - helm
     - longhorn
-   #  - cert-manager    ./
+   #  - cert-manager    ./ 
    # - nginx-ingr ess 
     - argocd
     - monitoring
