@@ -1,0 +1,74 @@
+# Values для kube-prometheus-stack. Ресурсы подобраны консервативно под
+# одну небольшую ноду; при росте кластера/диска увеличивайте.
+
+grafana:
+  # NodePort — единый способ доступа к UI, пока Ingress отключён.
+  service:
+    type: NodePort
+    nodePort: {{ grafana_nodeport }}
+  persistence:
+    enabled: true
+    storageClassName: {{ prometheus_storage_class }}
+    size: {{ grafana_storage_size }}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+prometheus:
+  prometheusSpec:
+    retention: {{ prometheus_retention }}
+    retentionSize: {{ prometheus_retention_size }}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    # Метрики переживают перезапуск пода — том на Longhorn.
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: {{ prometheus_storage_class }}
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: {{ prometheus_storage_size }}
+    # Подхватывать ServiceMonitor/PodMonitor/PrometheusRule из ВСЕХ неймспейсов,
+    # а не только помеченные лейблами этого релиза. Так ваши приложения смогут
+    # отдавать метрики Prometheus, просто добавив свой ServiceMonitor.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi

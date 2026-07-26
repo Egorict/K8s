@@ -44,16 +44,6 @@
   register: argocd_password
   changed_when: false
 
-- name: Show ArgoCD password
-  debug:
-    msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
-
-- name: Delete existing StorageClass (if any) to allow recreation with new binding mode
-  shell: |
-    kubectl delete storageclass yc-network-hdd --ignore-not-found=true
-  when: argocd_install.rc == 0
-  changed_when: false
-
 - name: Bootstrap root Application (app of apps)
   shell: kubectl apply -f {{ playbook_dir }}/../k8s/argocd/root-app.yaml
   when: argocd_install.rc == 0

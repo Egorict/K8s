@@ -15,9 +15,10 @@
     - kubernetes
     - cni
     - helm
-    - longhorn   
-   #  - cert-manager    ./          
-   # - nginx-ingr ess    
+    - longhorn
+   #  - cert-manager    ./
+   # - nginx-ingr ess
     - argocd
-    
+    - monitoring
+
 #    - yandex

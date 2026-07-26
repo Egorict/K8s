@@ -1,0 +1,17 @@
+---
+# Версия чарта запинена ради воспроизводимости (values-схема меняется между мажорами).
+kube_prometheus_stack_version: "87.16.1"
+monitoring_namespace: monitoring
+
+# Grafana доступна через NodePort, пока Ingress в кластере выключен.
+grafana_nodeport: 30300
+
+# Хранилище метрик. Размеры намеренно скромные под маленький диск ноды —
+# поднимайте, когда расширите диск. retention_size < storage_size, чтобы
+# Prometheus сам чистил старые данные и НЕ упирался в размер тома.
+prometheus_storage_class: "longhorn"
+prometheus_storage_size: "5Gi"
+prometheus_retention: "7d"
+prometheus_retention_size: "4GB"
+
+grafana_storage_size: "2Gi"

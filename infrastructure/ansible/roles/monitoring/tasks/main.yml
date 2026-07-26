@@ -1,0 +1,54 @@
+---
+- name: Add prometheus-community Helm repo
+  shell: |
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
+    helm repo update
+  register: helm_repo_add
+  changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
+
+- name: Render kube-prometheus-stack values
+  template:
+    src: values.yaml.j2
+    dest: /tmp/kube-prometheus-stack-values.yaml
+
+# Тот же guard, что и в роли longhorn: если релиз существует, но не в статусе
+# deployed (прерванная первая установка), helm upgrade --install выдаёт
+# "has no deployed releases". Сносим битый релиз заранее.
+- name: Get kube-prometheus-stack release status (if any)
+  shell: helm status kube-prometheus-stack -n {{ monitoring_namespace }} --output json
+  register: kps_status
+  changed_when: false
+  failed_when: false
+
+- name: Remove broken kube-prometheus-stack release before install
+  shell: helm uninstall kube-prometheus-stack -n {{ monitoring_namespace }} --no-hooks
+  when:
+    - kps_status.rc == 0
+    - '"deployed" not in (kps_status.stdout | from_json).info.status'
+  changed_when: true
+
+- name: Install kube-prometheus-stack
+  shell: |
+    helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+      --namespace {{ monitoring_namespace }} --create-namespace \
+      --version {{ kube_prometheus_stack_version }} \
+      -f /tmp/kube-prometheus-stack-values.yaml \
+      --wait --timeout 15m --atomic
+  register: install
+  retries: 2
+  delay: 10
+  until: install.rc == 0
+
+- name: Get Grafana admin password
+  shell: kubectl -n {{ monitoring_namespace }} get secret kube-prometheus-stack-grafana -o jsonpath="{.data.admin-password}" | base64 -d
+  register: grafana_password
+  changed_when: false
+  when: install.rc == 0
+
+- name: Show Grafana access info
+  debug:
+    msg: >-
+      Grafana: http://<node-ip>:{{ grafana_nodeport }}
+      | user: admin | password: {{ grafana_password.stdout }}
+      (смените пароль после первого входа)
+  when: install.rc == 0
