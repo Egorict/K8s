@@ -3,5 +3,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
+# Образ node уже содержит непривилегированного пользователя node (uid 1000).
+# Отдаём ему /app и переключаемся — процесс больше не работает от root.
+RUN chown -R node:node /app
+USER node
 EXPOSE 8080
 CMD ["node", "src/index.js"]

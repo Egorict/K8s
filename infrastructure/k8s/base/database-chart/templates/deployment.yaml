@@ -15,9 +15,24 @@ spec:
       labels:
         app: postgres
     spec:
+      # uid/gid 999 — пользователь postgres в официальном образе. fsGroup обязателен:
+      # без него kubelet не сменит владельца тома Longhorn, и непривилегированный
+      # процесс не сможет писать в PGDATA.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: postgres:15-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 5432
           env:
@@ -42,6 +57,12 @@ spec:
           volumeMounts:
             - name: postgres-storage
               mountPath: /var/lib/postgresql/data
+            # Пути, куда Postgres пишет вне PGDATA. Нужны из-за
+            # readOnlyRootFilesystem: unix-сокет и временные файлы.
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
           livenessProbe:
             exec:
               command:
@@ -66,3 +87,7 @@ spec:
         - name: postgres-storage
           persistentVolumeClaim:
             claimName: postgres-pvc
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

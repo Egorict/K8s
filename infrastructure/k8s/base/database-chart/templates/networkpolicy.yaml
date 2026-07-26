@@ -7,6 +7,9 @@ spec:
   podSelector:
     matchLabels:
       app: postgres
+  # Egress здесь намеренно не описан: базе некуда ходить, а default-deny-all
+  # уже запрещает весь исходящий трафик (кроме DNS). Пробы используют psql через
+  # unix-сокет внутри контейнера, сеть им не нужна.
   policyTypes:
     - Ingress
   ingress:

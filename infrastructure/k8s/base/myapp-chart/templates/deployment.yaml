@@ -14,12 +14,24 @@ spec:
       labels:
         app: myapp
     spec:
+      # uid 101 — непривилегированный пользователь nginx в образе nginx-unprivileged.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: myapp
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
         ports:
-        - containerPort: 80
+        - containerPort: {{ .Values.service.targetPort }}
         resources:
           limits:
             cpu: {{ .Values.resources.limits.cpu }}
@@ -31,7 +43,7 @@ spec:
         livenessProbe:
           httpGet:
             path: {{ .Values.livenessProbe.path }}
-            port: {{ .Values.livenessProbe.port }}
+            port: {{ .Values.service.targetPort }}
           initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
           periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
         {{- end }}
@@ -39,7 +51,15 @@ spec:
         readinessProbe:
           httpGet:
             path: {{ .Values.readinessProbe.path }}
-            port: {{ .Values.readinessProbe.port }}
+            port: {{ .Values.service.targetPort }}
           initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
           periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
         {{- end }}
+        # readOnlyRootFilesystem: true требует писать временные файлы куда-то ещё —
+        # nginx-unprivileged использует для этого /tmp.
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}

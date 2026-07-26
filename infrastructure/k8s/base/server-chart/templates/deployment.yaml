@@ -14,10 +14,22 @@ spec:
       labels:
         {{- include "server.selectorLabels" . | nindent 8 }}
     spec:
+      # uid 1000 — пользователь node в образе node:18-alpine (см. USER в dockerfile).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: {{ .Chart.Name }}
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: {{ .Values.service.port }}
         env:
@@ -36,4 +48,12 @@ spec:
             port: {{ .Values.service.port }}
           initialDelaySeconds: 5
           periodSeconds: 5
+        # При readOnlyRootFilesystem: true Node всё ещё может писать во временные
+        # файлы — даём ему для этого отдельный tmpfs вместо корня контейнера.
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
           

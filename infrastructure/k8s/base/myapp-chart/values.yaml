@@ -11,7 +11,10 @@ image:
   pullPolicy: IfNotPresent
 service:
   type: NodePort
-  port: 80
+  port: 80          # порт Service внутри кластера
+  targetPort: 8080  # порт контейнера: nginx-unprivileged слушает 8080 (см. nginx.conf).
+                    # Единственный источник правды — на него ссылаются Deployment,
+                    # Service, пробы и NetworkPolicy.
   nodePort: 30081   # порт, по которому будет доступно приложение
 # Ingress отключён – используем NodePort
 ingress:
@@ -23,15 +26,15 @@ resources:
   requests:
     cpu: 100m
     memory: 128Mi
+# Порт проб намеренно не дублируется — шаблон берёт service.targetPort,
+# чтобы номер не мог разъехаться с портом контейнера.
 livenessProbe:
   enabled: true
   path: /
-  port: 80
   initialDelaySeconds: 30
   periodSeconds: 10
 readinessProbe:
   enabled: true
   path: /
-  port: 80
   initialDelaySeconds: 5
   periodSeconds: 5

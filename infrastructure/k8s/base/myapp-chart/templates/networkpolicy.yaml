@@ -8,9 +8,20 @@ spec:
       app: myapp
   policyTypes:
     - Ingress
+    - Egress
   ingress:
     # Трафик приходит снаружи кластера через NodePort — источник не под, поэтому
     # "from" не указываем: разрешаем на этот порт с любого адреса.
     - ports:
         - protocol: TCP
-          port: 80
+          port: {{ .Values.service.targetPort }}
+  egress:
+    # nginx проксирует /api на сервер — это единственное исходящее соединение
+    # клиента (DNS разрешён отдельно, политикой allow-dns-egress).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: server
+      ports:
+        - protocol: TCP
+          port: 8080

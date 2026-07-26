@@ -10,6 +10,7 @@ spec:
       {{- include "server.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    - Egress
   ingress:
     # Только клиент имеет право дёргать API сервера напрямую.
     - from:
@@ -19,3 +20,13 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.service.port }}
+  egress:
+    # Сервер ходит только в базу (DNS разрешён политикой allow-dns-egress).
+    # Наружу в интернет доступа нет — приложению это не нужно.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432

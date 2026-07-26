@@ -26,6 +26,24 @@
   register: helm_repo_add
   changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
 
+# Тот же guard, что и в роли longhorn: --atomic при неудачной ПЕРВОЙ установке
+# оставляет релиз в статусе failed, из которого helm upgrade --install выбраться
+# не может ("has no deployed releases"), и retries ниже упираются в ту же стену.
+# CRD (applications.argoproj.io) при helm uninstall не удаляются, поэтому объекты
+# Application переживают пересоздание релиза.
+- name: Get ArgoCD release status (if any)
+  shell: helm status argocd -n argocd --output json
+  register: argocd_status
+  changed_when: false
+  failed_when: false
+
+- name: Remove broken ArgoCD release before install
+  shell: helm uninstall argocd -n argocd --no-hooks
+  when:
+    - argocd_status.rc == 0
+    - '"deployed" not in (argocd_status.stdout | from_json).info.status'
+  changed_when: true
+
 - name: Install ArgoCD via Helm
   shell: |
     helm upgrade --install argocd argo/argo-cd \

@@ -1,4 +1,7 @@
-FROM nginx:alpine
+# nginx-unprivileged — официальный вариант образа, работающий от uid 101 без root.
+# Обычный nginx:alpine обязан стартовать от root, потому что порт 80 привилегированный
+# (<1024). Здесь nginx слушает 8080, поэтому root не нужен вообще.
+FROM nginxinc/nginx-unprivileged:alpine
 COPY html/ /usr/share/nginx/html/
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
+EXPOSE 8080

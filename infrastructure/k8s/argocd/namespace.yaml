@@ -43,3 +43,43 @@ spec:
       max:
         cpu: "1"
         memory: 1Gi
+---
+# Базовый запрет: пустой podSelector = ВСЕ поды неймспейса, пустые ingress/egress =
+# не разрешено ничего. Всё нужное открывается отдельными политиками (здесь и в чартах);
+# NetworkPolicy складываются — трафик разрешён, если его разрешило хотя бы одно правило.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: app
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Без DNS не работает НИЧЕГО: nginx не резолвит server-app, сервер не резолвит
+# db-service. Поэтому egress на CoreDNS разрешаем всем подам неймспейса.
+# Лейбл kubernetes.io/metadata.name проставляется на неймспейсы автоматически.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: app
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
