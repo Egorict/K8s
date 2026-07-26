@@ -30,3 +30,11 @@
     enabled: yes
     daemon_reload: yes
   when: containerd_config_created.changed  # перезапускать только если конфиг изменился
+
+# Гарантируем автозапуск при каждой загрузке VM независимо от того, менялся ли
+# конфиг. Идемпотентно: если уже enabled+running — задача ничего не делает.
+- name: Ensure containerd is enabled and running (survives reboot)
+  systemd:
+    name: containerd
+    enabled: yes
+    state: started

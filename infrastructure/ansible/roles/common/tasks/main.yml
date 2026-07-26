@@ -16,7 +16,20 @@
     replace: ''
   when: swap_status.stdout != ""
 
-- name: Load kernel modules
+# Персистим модули: /etc/modules-load.d/*.conf systemd загружает при каждом boot.
+# Без этого overlay/br_netfilter грузятся только на текущую сессию и после
+# перезагрузки VM пропадают → ломается сеть подов (не применяется bridge sysctl).
+- name: Persist kernel modules across reboots
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      overlay
+      br_netfilter
+
+- name: Load kernel modules (current session)
   modprobe:
     name: "{{ item }}"
     state: present

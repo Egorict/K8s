@@ -23,6 +23,17 @@
   args:
     creates: /etc/kubernetes/admin.conf
 
+# Явно включаем kubelet в автозапуск. Обычно это делает deb-пакет/kubeadm, но в
+# воспроизводимом провижининге на это полагаться нельзя. kubelet при загрузке
+# читает /etc/kubernetes/manifests/ и поднимает control-plane (etcd, apiserver,
+# controller-manager, scheduler), а тот дальше — все рабочие поды.
+- name: Ensure kubelet is enabled and running (survives reboot)
+  systemd:
+    name: kubelet
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
 # На single-node кластере control-plane нода ОБЯЗАНА принимать рабочие нагрузки,
 # иначе поды висят Pending (нет worker-нод). Снимаем тейнт, который kubeadm вешает
 # по умолчанию. При переходе на multi-node выставьте single_node=false в playbook.yaml,
