@@ -74,7 +74,7 @@
   register: helm_repo_add
   changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
 
-# Guard против ловушки Helm "has no deployed releases": если релиз существует,
+# Guard против ловушки Helm "has no deployed releases": если релиз существует, 
 # но НЕ в статусе deployed (failed/pending от прерванной первой установки),
 # helm upgrade --install из него выбраться не может. Сносим битый релиз заранее,
 # чтобы следующий шаг сделал чистую установку. На здоровом (deployed) релизе
