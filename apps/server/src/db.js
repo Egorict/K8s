@@ -9,9 +9,16 @@ const pool = new Pool({
   max: 20,
 });
 
+// Без этого обработчика ошибка на простаивающем соединении (например, когда
+// Postgres перезапустился) становится uncaught exception и роняет процесс.
+// Пул сам выбросит битого клиента и создаст нового при следующем запросе.
+pool.on('error', (err) => {
+  console.error('❌ Unexpected error on idle PostgreSQL client:', err.message);
+});
+
 const initDB = async () => {
+  const client = await pool.connect();
   try {
-    const client = await pool.connect();
     console.log('✅ Connected to PostgreSQL');
     await client.query(`
       CREATE TABLE IF NOT EXISTS items (
@@ -22,11 +29,21 @@ const initDB = async () => {
       );
     `);
     console.log('✅ Table "items" is ready');
+  } finally {
+    // release строго в finally: если запрос бросит исключение, соединение
+    // иначе навсегда останется занятым и пул постепенно исчерпается.
     client.release();
-  } catch (err) {
-    console.error('❌ Error initializing PostgreSQL:', err.message);
-    throw err;
   }
+};
+
+// Лёгкая проверка для readiness: проходит весь путь до базы и обратно,
+// а не просто смотрит, открыт ли TCP-порт.
+const ping = async () => {
+  await pool.query('SELECT 1');
+};
+
+const closePool = async () => {
+  await pool.end();
 };
 
 const getAll = async () => {
@@ -47,4 +64,4 @@ const createItem = async (name, value) => {
   return res.rows[0];
 };
 
-module.exports = { initDB, getAll, getById, createItem };
+module.exports = { initDB, ping, closePool, getAll, getById, createItem };

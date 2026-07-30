@@ -14,6 +14,9 @@ spec:
       labels:
         {{- include "server.selectorLabels" . | nindent 8 }}
     spec:
+      # Запас на graceful shutdown: SHUTDOWN_GRACE_MS (5s) на вывод из Service
+      # + время на добивание активных запросов + страховочный таймер в коде.
+      terminationGracePeriodSeconds: 30
       # uid 1000 — пользователь node в образе node:18-alpine (см. USER в dockerfile).
       securityContext:
         runAsNonRoot: true
@@ -36,18 +39,24 @@ spec:
         {{- toYaml .Values.env | nindent 8 }}
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
+        # liveness смотрит только на живость процесса (/health не трогает БД) —
+        # иначе падение Postgres приводило бы к бесконечным рестартам сервера.
         livenessProbe:
           httpGet:
             path: /health
             port: {{ .Values.service.port }}
-          initialDelaySeconds: 30
+          initialDelaySeconds: 10
           periodSeconds: 10
+          failureThreshold: 3
+        # readiness проверяет реальную доступность БД (/ready делает SELECT 1).
+        # Пока база недоступна, под просто выводится из Service, но не убивается.
         readinessProbe:
           httpGet:
-            path: /health
+            path: /ready
             port: {{ .Values.service.port }}
           initialDelaySeconds: 5
           periodSeconds: 5
+          failureThreshold: 3
         # При readOnlyRootFilesystem: true Node всё ещё может писать во временные
         # файлы — даём ему для этого отдельный tmpfs вместо корня контейнера.
         volumeMounts:
