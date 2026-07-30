@@ -10,3 +10,12 @@ override.tf.json
 .terraform/
 .terraform.lock.hcl
 *.tfvars
+
+# Node.js
+node_modules/
+
+# Переменные окружения — в кластере значения приходят из Secret/env,
+# в git им не место
+.env
+.env.local
+.env.*.local

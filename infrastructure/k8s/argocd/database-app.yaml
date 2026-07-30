@@ -9,9 +9,6 @@ spec:
     repoURL: https://github.com/Egorict/K8s.git
     targetRevision: HEAD
     path: infrastructure/k8s/base/database-chart
-    helm:
-      valueFiles:
-        - values.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: app
