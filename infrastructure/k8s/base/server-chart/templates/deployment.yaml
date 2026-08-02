@@ -14,6 +14,10 @@ spec:
       labels:
         {{- include "server.selectorLabels" . | nindent 8 }}
     spec:
+      # Приложение не обращается к Kubernetes API — токен ServiceAccount ему не
+      # нужен. Без этого он монтируется автоматически и даёт готовый вектор
+      # бокового перемещения при компрометации пода.
+      automountServiceAccountToken: false
       # Запас на graceful shutdown: SHUTDOWN_GRACE_MS (5s) на вывод из Service
       # + время на добивание активных запросов + страховочный таймер в коде.
       terminationGracePeriodSeconds: 30

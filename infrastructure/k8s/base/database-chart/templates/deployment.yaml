@@ -15,6 +15,8 @@ spec:
       labels:
         app: postgres
     spec:
+      # Postgres не обращается к Kubernetes API — токен ServiceAccount ему не нужен.
+      automountServiceAccountToken: false
       # uid/gid 70 — пользователь postgres именно в ALPINE-варианте образа
       # (в Debian-варианте он 999 — не перепутать при смене базового образа).
       # fsGroup обязателен: без него kubelet не сменит владельца тома Longhorn,

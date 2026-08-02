@@ -6,6 +6,17 @@ monitoring_namespace: monitoring
 # Grafana доступна через NodePort, пока Ingress в кластере выключен.
 grafana_nodeport: 30300
 
+# Пароль администратора Grafana. Дефолт чарта (prom-operator) — общеизвестный,
+# поэтому задаём свой. Передавайте через -e grafana_admin_password=... или
+# Ansible Vault; значение ниже — только чтобы роль не падала без параметра.
+grafana_admin_password: "change-me-please"
+
+# Куда Alertmanager шлёт алерты. Пока пусто — срабатывания видны только в UI
+# Alertmanager и никуда не уходят. Задайте URL вебхука (Telegram-бридж, Slack,
+# собственный обработчик), чтобы алерты реально доходили:
+#   -e alertmanager_webhook_url=https://...
+alertmanager_webhook_url: ""
+
 # Хранилище метрик. Размеры намеренно скромные под маленький диск ноды —
 # поднимайте, когда расширите диск. retention_size < storage_size, чтобы
 # Prometheus сам чистил старые данные и НЕ упирался в размер тома.

@@ -14,6 +14,8 @@ spec:
       labels:
         app: myapp
     spec:
+      # nginx не обращается к Kubernetes API — токен ServiceAccount ему не нужен.
+      automountServiceAccountToken: false
       # uid 101 — непривилегированный пользователь nginx в образе nginx-unprivileged.
       securityContext:
         runAsNonRoot: true

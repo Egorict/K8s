@@ -1,41 +1,32 @@
 ---
 - name: Add Ingress NGINX Helm repository
-  shell: |
-    helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-    helm repo update
-  register: helm_repo_add
-  changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
+  kubernetes.core.helm_repository:
+    name: ingress-nginx
+    repo_url: https://kubernetes.github.io/ingress-nginx
 
-- name: Install NGINX Ingress Controller via Helm
-  shell: |
-    helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
-      --namespace {{ ingress_nginx_namespace }} \
-      --create-namespace \
-      --set controller.service.type={{ ingress_nginx_service_type }} \
-      --set controller.service.nodePorts.http={{ ingress_nginx_http_port }} \
-      --set controller.service.nodePorts.https={{ ingress_nginx_https_port }} \
-      --set controller.ingressClassResource.enabled=true \
-      --set controller.ingressClassResource.default=true \
-      --wait --timeout 10m
-  register: helm_install
-  retries: 3
-  delay: 10
-  until: helm_install.rc == 0
-  changed_when: true
+- name: Install NGINX Ingress Controller
+  kubernetes.core.helm:
+    name: ingress-nginx
+    chart_ref: ingress-nginx/ingress-nginx
+    chart_version: "{{ ingress_nginx_version }}"
+    release_namespace: "{{ ingress_nginx_namespace }}"
+    create_namespace: true
+    values:
+      controller:
+        service:
+          type: "{{ ingress_nginx_service_type }}"
+          nodePorts:
+            http: "{{ ingress_nginx_http_port }}"
+            https: "{{ ingress_nginx_https_port }}"
+        ingressClassResource:
+          enabled: true
+          default: true
+    wait: true
+    wait_timeout: 10m0s
+    atomic: true
 
-- name: Wait for Ingress Controller pods to be ready
-  shell: |
-    kubectl wait --for=condition=ready pod --all -n {{ ingress_nginx_namespace }} --timeout=300s
-  register: wait_pods
-  until: wait_pods.rc == 0
-  retries: 10
-  delay: 10
-  changed_when: false
-
-- name: Show Ingress Controller external IP/NodePort
-  debug:
-    msg: |
-      Ingress Controller is ready.
-      NodePort HTTP: {{ ingress_nginx_http_port }}
-      NodePort HTTPS: {{ ingress_nginx_https_port }}
-      Use these ports to expose your services via Ingress.
+- name: Show Ingress Controller access info
+  ansible.builtin.debug:
+    msg: >-
+      Ingress Controller готов.
+      HTTP: {{ ingress_nginx_http_port }}, HTTPS: {{ ingress_nginx_https_port }}

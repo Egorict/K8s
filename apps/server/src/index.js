@@ -1,6 +1,7 @@
 const express = require('express');
 const { initDB, ping, closePool } = require('./db');
 const routes = require('./routes');
+const { metricsMiddleware, metricsHandler } = require('./metrics');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -16,8 +17,14 @@ let shuttingDown = false;
 // к API через nginx клиента на том же origin (/api), поэтому запросы same-origin.
 // Единственный клиент сервера — nginx (server-to-server), где CORS неприменим.
 
+// Замер должен стоять ДО маршрутов, чтобы охватить их все.
+app.use(metricsMiddleware);
 app.use(express.json());
 app.use(routes);
+
+// Метрики для Prometheus. Наружу не торчат: сервер это ClusterIP, а NetworkPolicy
+// пускает сюда только под клиента и скрейп из неймспейса monitoring.
+app.get('/metrics', metricsHandler);
 
 // LIVENESS — "процесс жив, его не надо перезапускать".
 // Базу здесь НЕ проверяем намеренно: рестарт пода не починит упавший Postgres,

@@ -1,6 +1,8 @@
 ---
 ingress_nginx_namespace: ingress-nginx
-ingress_nginx_version: "4.11.3"   # актуальная версия Helm-чарта
-ingress_nginx_service_type: NodePort   # для локального теста; для облака можно LoadBalancer
-ingress_nginx_http_port: 30080
-ingress_nginx_https_port: 30443
+ingress_nginx_version: "4.11.3"
+ingress_nginx_service_type: NodePort   # для локального теста; в облаке — LoadBalancer
+# 31080/31443, а НЕ 30080/30443: последние уже заняты ArgoCD
+# (см. roles/argocd/defaults/main.yaml), Service не смог бы забиндить порт.
+ingress_nginx_http_port: 31080
+ingress_nginx_https_port: 31443

@@ -20,6 +20,17 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.service.port }}
+    {{- if .Values.serviceMonitor.enabled }}
+    # Скрейп метрик из неймспейса monitoring. Без этого правила default-deny
+    # молча резал бы Prometheus, и таргет вечно висел бы в состоянии Down.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    {{- end }}
   egress:
     # Сервер ходит только в базу (DNS разрешён политикой allow-dns-egress).
     # Наружу в интернет доступа нет — приложению это не нужно.

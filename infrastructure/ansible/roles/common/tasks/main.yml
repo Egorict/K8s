@@ -1,4 +1,17 @@
 ---
+# Модули kubernetes.core (helm, k8s, helm_repository) работают через Python-клиент
+# Kubernetes на целевой машине. Без него они падают с "Failed to import the
+# required Python library". Ставим до всех ролей, которые их используют.
+- name: Install Python Kubernetes client for kubernetes.core modules
+  ansible.builtin.apt:
+    name:
+      - python3-kubernetes
+      - python3-yaml
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+  when: ansible_facts['os_family'] == "Debian"
+
 - name: Check if swap is enabled
   command: swapon --show
   register: swap_status
@@ -36,7 +49,7 @@
   loop:
     - overlay
     - br_netfilter
-  when: ansible_os_family == "Debian"
+  when: ansible_facts['os_family'] == "Debian"
 
 - name: Apply sysctl parameters for Kubernetes
   sysctl:

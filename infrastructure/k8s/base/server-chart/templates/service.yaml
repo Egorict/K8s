@@ -7,7 +7,8 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
-    - port: {{ .Values.service.port }}
+    - name: http          # имя нужно ServiceMonitor'у для ссылки на порт
+      port: {{ .Values.service.port }}
       targetPort: {{ .Values.service.port }}
       {{- if eq .Values.service.type "NodePort" }}
       nodePort: {{ .Values.service.nodePort }}

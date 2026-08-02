@@ -1,11 +1,42 @@
 ---
-- name: Add Kubernetes apt repo and GPG key
-  shell: |
-    curl -fsSL --max-time 30 https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-    echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
-    apt update
-  args:
-    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg  # не перезаписывать при повторных запусках
+# Ключ и репозиторий привязаны к kubernetes_version. Раньше здесь стоял
+# `creates:`, из-за которого смена версии в playbook.yaml не приводила НИ К ЧЕМУ:
+# репозиторий молча оставался старым. Теперь оба ресурса пересобираются, если
+# версия изменилась, и apt-кеш обновляется только по факту изменения.
+- name: Ensure apt keyrings directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Fetch Kubernetes apt signing key
+  ansible.builtin.get_url:
+    url: "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key"
+    dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+    mode: '0644'
+    force: yes          # URL зависит от версии — надо перекачивать и сверять
+    timeout: 30
+  register: k8s_key
+
+- name: Dearmor Kubernetes apt signing key
+  ansible.builtin.command:
+    cmd: >-
+      gpg --batch --yes --dearmor
+      -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      /etc/apt/keyrings/kubernetes-apt-keyring.asc
+  when: k8s_key.changed
+
+- name: Configure Kubernetes apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/kubernetes.list
+    content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /\n"
+    mode: '0644'
+  register: k8s_repo
+
+- name: Refresh apt cache after repository change
+  ansible.builtin.apt:
+    update_cache: yes
+  when: k8s_key.changed or k8s_repo.changed
 
 - name: Install kubeadm, kubelet, kubectl
   apt:

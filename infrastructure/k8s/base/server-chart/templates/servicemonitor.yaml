@@ -1,0 +1,23 @@
+{{- if .Values.serviceMonitor.enabled }}
+# ServiceMonitor — это CRD Prometheus Operator: он говорит Prometheus, откуда
+# забирать метрики. Работает только если установлен kube-prometheus-stack
+# (роль monitoring), поэтому вынесен под флаг: без оператора CRD не существует
+# и синк ArgoCD упал бы с "no matches for kind ServiceMonitor".
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "server.fullname" . }}
+  labels:
+    {{- include "server.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "server.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+{{- end }}

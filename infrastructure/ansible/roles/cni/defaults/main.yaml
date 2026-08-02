@@ -1,0 +1,3 @@
+---
+calico_version: "v3.31.6"
+calico_namespace: calico-system

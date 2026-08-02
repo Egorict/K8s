@@ -20,10 +20,16 @@ resources:
 
 replicaCount: 1
 
+# Сбор метрик приложения через Prometheus Operator. Требует установленной роли
+# monitoring (kube-prometheus-stack) — без неё CRD ServiceMonitor не существует
+# и синк упадёт, поэтому здесь есть выключатель.
+serviceMonitor:
+  enabled: true
+  interval: 30s
+
 env:
   - name: PORT
     value: "8080"
-  # Добавьте эти переменные:
   - name: DB_HOST
     value: db-service
   - name: DB_PORT

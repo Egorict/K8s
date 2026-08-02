@@ -3,6 +3,10 @@ name: Deploy to Kubernetes
 on:
   push:
     branches: [ master, main ]
+  # Проверки гоняются и на PR — но без сборки/деплоя: до мержа в кластер
+  # ничего попадать не должно.
+  pull_request:
+    branches: [ master, main ]
   workflow_dispatch:
     inputs:
       longhorn_force_reset:
@@ -14,6 +18,14 @@ on:
         type: boolean
         default: false
 
+# Два быстрых пуша подряд раньше гонялись за git push в values.yaml, и один
+# падал. Теперь новый запуск ждёт предыдущий вместо параллельной гонки.
+# cancel-in-progress: false — прерывать наполовину выполненный деплой опаснее,
+# чем подождать.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   SERVER_IMAGE_NAME: ermakov880/devops-project-server
   SERVER_VALUES_FILE: infrastructure/k8s/base/server-chart/values.yaml
@@ -21,13 +33,15 @@ env:
   CLIENT_VALUES_FILE: infrastructure/k8s/base/myapp-chart/values.yaml
 
 jobs:
-  # 0. Определяем, что именно поменялось в пуше — от этого зависит,
-  #    какие из независимых джоб ниже вообще нужно запускать.
+  # 0. Что именно изменилось. Клиент и сервер разделены: правка сервера больше
+  #    не пересобирает и не передеплоивает клиент.
   changes:
     runs-on: ubuntu-latest
     outputs:
       infra: ${{ steps.filter.outputs.infra }}
-      app: ${{ steps.filter.outputs.app }}
+      server: ${{ steps.filter.outputs.server }}
+      client: ${{ steps.filter.outputs.client }}
+      charts: ${{ steps.filter.outputs.charts }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -36,17 +50,75 @@ jobs:
           filters: |
             infra:
               - 'infrastructure/ansible/**'
-            app:
-              - 'apps/**'
+            server:
+              - 'apps/server/**'
+            client:
+              - 'apps/client/**'
+            charts:
+              - 'infrastructure/k8s/**'
 
-  # 1. Инфраструктура кластера (Ansible). Запускается ТОЛЬКО если менялись
-  #    файлы в infrastructure/ansible/**, либо если запущено вручную.
-  #    Больше не выполняется на каждый пуш с правкой в коде приложения.
-  infra:
+  # 1. Гейты качества. Идут на КАЖДЫЙ push и PR — до сборки образов.
+  lint-and-test:
     needs: changes
-    if: needs.changes.outputs.infra == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 75   # чуть больше command_timeout ниже — страховка от зависания
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        if: needs.changes.outputs.server == 'true'
+        with:
+          node-version: '18'
+          cache: npm
+          cache-dependency-path: apps/server/package-lock.json
+
+      # npm ci (не install) — ставит строго по lock-файлу и падает, если он
+      # разошёлся с package.json. Заодно проверка целостности зависимостей.
+      - name: Install server dependencies
+        if: needs.changes.outputs.server == 'true'
+        working-directory: apps/server
+        run: npm ci
+
+      - name: Audit server dependencies
+        if: needs.changes.outputs.server == 'true'
+        working-directory: apps/server
+        run: npm audit --audit-level=high
+
+      - name: Syntax check server sources
+        if: needs.changes.outputs.server == 'true'
+        working-directory: apps/server
+        run: for f in src/*.js; do node --check "$f"; done
+
+      - name: Set up Helm
+        if: needs.changes.outputs.charts == 'true'
+        uses: azure/setup-helm@v4
+
+      # helm lint ловит синтаксис и отсутствующие values; helm template
+      # дополнительно проверяет, что чарт вообще рендерится в валидный YAML.
+      - name: Lint and render Helm charts
+        if: needs.changes.outputs.charts == 'true'
+        run: |
+          for chart in infrastructure/k8s/base/*/; do
+            echo "=== $chart ==="
+            helm lint "$chart"
+            helm template test "$chart" > /dev/null
+          done
+
+      - name: Validate ArgoCD manifests
+        if: needs.changes.outputs.charts == 'true'
+        run: |
+          for f in infrastructure/k8s/argocd/*.yaml; do
+            python3 -c "import yaml,sys; list(yaml.safe_load_all(open(sys.argv[1])))" "$f"
+          done
+
+  # 2. Инфраструктура кластера (Ansible). Только при изменениях в ролях
+  #    или по ручному запуску. На PR не выполняется.
+  infra:
+    needs: [changes, lint-and-test]
+    if: >-
+      github.event_name != 'pull_request' &&
+      (needs.changes.outputs.infra == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - name: Deploy K8s infrastructure via Ansible
@@ -55,9 +127,8 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          # Дефолт command_timeout у ssh-action = 10m, а весь плейбук (Calico +
-          # Longhorn --timeout 25m + ArgoCD 10m + monitoring 15m) в худшем случае
-          # идёт заметно дольше. Иначе SSH убивает ansible на середине.
+          # Дефолт command_timeout у ssh-action = 10m, а весь плейбук в худшем
+          # случае идёт заметно дольше — иначе SSH убьёт ansible на середине.
           command_timeout: 60m
           script: |
             if ! command -v ansible-playbook &> /dev/null; then
@@ -71,66 +142,111 @@ jobs:
             git pull origin master
             ansible-playbook infrastructure/ansible/playbook.yaml -c local -i localhost, ${{ github.event.inputs.longhorn_force_reset == 'true' && '-e longhorn_force_reset=true' || '' }} ${{ github.event.inputs.argocd_force_reset == 'true' && '-e argocd_force_reset=true' || '' }}
 
-  # 2. Сборка образов и обновление Helm-чарта. Запускается ТОЛЬКО если менялся
-  #    код приложения (apps/**), и НЕ зависит от джобы infra — они полностью
-  #    независимы и могут идти в разных пушах, не блокируя друг друга.
+  # 3. Сборка образов. Каждый образ собирается ТОЛЬКО если менялся его код.
+  #    На PR собираем без push — чтобы проверить, что Dockerfile валиден.
   build:
-    needs: changes
-    if: needs.changes.outputs.app == 'true'
+    needs: [changes, lint-and-test]
+    if: needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # нужно для бот-коммита с новыми тегами
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
-      # Добавляем настройку Buildx с кешем
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push client image
+      - name: Build client image
+        if: needs.changes.outputs.client == 'true'
         uses: docker/build-push-action@v5
         with:
           context: ./apps/client
-          push: true
-          tags: |
-            ${{ env.CLIENT_IMAGE_NAME }}:latest
-            ${{ env.CLIENT_IMAGE_NAME }}:${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ env.CLIENT_IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build and push server image
+      - name: Build server image
+        if: needs.changes.outputs.server == 'true'
         uses: docker/build-push-action@v5
         with:
           context: ./apps/server
-          push: true
-          tags: |
-            ${{ env.SERVER_IMAGE_NAME }}:latest
-            ${{ env.SERVER_IMAGE_NAME }}:${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ env.SERVER_IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Update values.yaml files with new tag
-        run: |
-          sed -i "s|tag:.*|tag: ${{ github.sha }}|" ${{ env.SERVER_VALUES_FILE }}
-          sed -i "s|tag:.*|tag: ${{ github.sha }}|" ${{ env.CLIENT_VALUES_FILE }}
-          echo "=== Server values ===" && cat ${{ env.SERVER_VALUES_FILE }}
-          echo "=== Client values ===" && cat ${{ env.CLIENT_VALUES_FILE }}
+      # Скан на уязвимости ПОСЛЕ сборки, но до обновления тегов в git:
+      # уязвимый образ не должен доехать до кластера.
+      - name: Scan client image
+        if: needs.changes.outputs.client == 'true'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.CLIENT_IMAGE_NAME }}:${{ github.sha }}
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
 
-      - name: Commit and push changes to values.yaml
+      - name: Scan server image
+        if: needs.changes.outputs.server == 'true'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.SERVER_IMAGE_NAME }}:${{ github.sha }}
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Install yq
+        if: github.event_name != 'pull_request'
+        uses: mikefarah/yq@v4.44.3
+        with:
+          cmd: yq --version
+
+      # yq правит именно поле image.tag. Прежний `sed "s|tag:.*|"` заменял
+      # ЛЮБУЮ строку, начинающуюся с tag:, и сломался бы при появлении второго
+      # такого ключа в файле.
+      - name: Update image tags
+        if: github.event_name != 'pull_request'
+        run: |
+          if [ "${{ needs.changes.outputs.server }}" = "true" ]; then
+            yq -i '.image.tag = "${{ github.sha }}"' "${{ env.SERVER_VALUES_FILE }}"
+          fi
+          if [ "${{ needs.changes.outputs.client }}" = "true" ]; then
+            yq -i '.image.tag = "${{ github.sha }}"' "${{ env.CLIENT_VALUES_FILE }}"
+          fi
+          git diff --stat
+
+      # Пуш с ретраем и rebase: если параллельный коммит успел прилететь,
+      # раньше здесь был отказ non-fast-forward и падение всей джобы.
+      - name: Commit and push updated tags
         if: github.event_name == 'push'
         run: |
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git add ${{ env.SERVER_VALUES_FILE }}
-          git add ${{ env.CLIENT_VALUES_FILE }}
-          git diff --staged --quiet || git commit -m "Update image tags to ${{ github.sha }} [skip ci]"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}
+          git add "${{ env.SERVER_VALUES_FILE }}" "${{ env.CLIENT_VALUES_FILE }}"
+          if git diff --staged --quiet; then
+            echo "Теги не изменились — коммитить нечего"
+            exit 0
+          fi
+          git commit -m "Update image tags to ${{ github.sha }} [skip ci]"
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "Запушено с попытки $attempt"
+              exit 0
+            fi
+            echo "Пуш отклонён, подтягиваю изменения и пробую снова ($attempt/3)"
+            git pull --rebase origin ${{ github.ref_name }}
+          done
+          echo "Не удалось запушить после 3 попыток"
+          exit 1

@@ -1,43 +1,38 @@
 ---
 - name: Add Jetstack Helm repository
-  shell: |
-    helm repo add jetstack https://charts.jetstack.io
-    helm repo update
-  register: helm_repo_add
-  changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
+  kubernetes.core.helm_repository:
+    name: jetstack
+    repo_url: https://charts.jetstack.io
 
-- name: Install Cert-Manager via Helm
-  shell: |
-    helm upgrade --install cert-manager jetstack/cert-manager \
-      --namespace {{ cert_manager_namespace }} \
-      --create-namespace \
-      --set installCRDs=true \
-      --version {{ cert_manager_version }} \
-      --wait --timeout 10m
-  register: helm_install
-  retries: 3
-  delay: 10
-  until: helm_install.rc == 0
-  changed_when: true
+- name: Install cert-manager
+  kubernetes.core.helm:
+    name: cert-manager
+    chart_ref: jetstack/cert-manager
+    chart_version: "{{ cert_manager_version }}"
+    release_namespace: "{{ cert_manager_namespace }}"
+    create_namespace: true
+    values:
+      installCRDs: true
+    wait: true
+    wait_timeout: 10m0s
+    atomic: true
 
-- name: Wait for Cert-Manager pods to be ready
-  shell: |
-    kubectl wait --for=condition=ready pod --all -n {{ cert_manager_namespace }} --timeout=300s
-  register: wait_pods
-  until: wait_pods.rc == 0
-  retries: 10
-  delay: 10
-  changed_when: false
+# CRD должен быть зарегистрирован в API-дискавери, иначе ClusterIssuer ниже
+# упадёт с "no matches for kind" — та же гонка, что была у Calico.
+- name: Wait for ClusterIssuer CRD to be established
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: clusterissuers.cert-manager.io
+    wait: true
+    wait_condition:
+      type: Established
+      status: "True"
+    wait_timeout: 120
 
-- name: Create ClusterIssuer (Let's Encrypt)
-  template:
-    src: cluster-issuer.yaml.j2
-    dest: /tmp/cluster-issuer.yaml
+- name: Create Let's Encrypt ClusterIssuer
+  kubernetes.core.k8s:
+    state: present
+    template: cluster-issuer.yaml.j2
   vars:
     email: "{{ cert_manager_email }}"
-
-- name: Apply ClusterIssuer
-  shell: |
-    kubectl apply -f /tmp/cluster-issuer.yaml
-  register: apply_issuer
-  changed_when: '"created" in apply_issuer.stdout or "configured" in apply_issuer.stdout'

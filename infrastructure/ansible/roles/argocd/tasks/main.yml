@@ -1,63 +1,64 @@
 ---
-- name: Delete all ArgoCD resources (including global)
-  shell: |
-    kubectl delete -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml --ignore-not-found=true 2>/dev/null || true
-    kubectl delete namespace argocd --ignore-not-found=true 2>/dev/null || true
-    kubectl delete crd applications.argoproj.io appprojects.argoproj.io --ignore-not-found=true 2>/dev/null || true
-    kubectl delete clusterrole argocd-application-controller argocd-applicationset-controller argocd-server argocd-redis argocd-repo-server argocd-dex-server argocd-notifications-controller --ignore-not-found=true 2>/dev/null || true
-    kubectl delete clusterrolebinding argocd-application-controller argocd-applicationset-controller argocd-server --ignore-not-found=true 2>/dev/null || true
+# Аварийный полный снос ArgoCD, включая cluster-scoped ресурсы и CRD.
+# Императивная операция — осознанно оставлена на shell. Только по явному флагу.
+- name: Force cleanup ArgoCD (release + namespace + CRDs + cluster roles)
+  ansible.builtin.shell: |
+    helm uninstall argocd -n {{ argocd_namespace }} --ignore-not-found 2>/dev/null || true
+    kubectl delete namespace {{ argocd_namespace }} --ignore-not-found=true 2>/dev/null || true
+    kubectl delete crd applications.argoproj.io applicationsets.argoproj.io appprojects.argoproj.io --ignore-not-found=true 2>/dev/null || true
+    kubectl delete clusterrole -l app.kubernetes.io/part-of=argocd --ignore-not-found=true 2>/dev/null || true
+    kubectl delete clusterrolebinding -l app.kubernetes.io/part-of=argocd --ignore-not-found=true 2>/dev/null || true
     sleep 2
-  changed_when: false
   failed_when: false
-  when: argocd_force_reset | default(false) | bool   # только по явному запросу, не на каждом прогоне
+  changed_when: true
+  when: argocd_force_reset | bool
 
-- name: Force remove existing ArgoCD Helm release (if any)
-  shell: |
-    helm uninstall argocd -n argocd --ignore-not-found 2>/dev/null || true
-    sleep 2
-  changed_when: false
-  failed_when: false
-  when: argocd_force_reset | default(false) | bool
+- name: Add ArgoCD Helm repository
+  kubernetes.core.helm_repository:
+    name: argo
+    repo_url: https://argoproj.github.io/argo-helm
 
-- name: Add ArgoCD Helm repo
-  shell: |
-    helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
-    helm repo update
-  register: helm_repo_add
-  changed_when: '"has been added" in helm_repo_add.stdout or "has been updated" in helm_repo_add.stdout'
-
-# Тот же guard, что и в роли longhorn: --atomic при неудачной ПЕРВОЙ установке
-# оставляет релиз в статусе failed, из которого helm upgrade --install выбраться
-# не может ("has no deployed releases"), и retries ниже упираются в ту же стену.
-# CRD (applications.argoproj.io) при helm uninstall не удаляются, поэтому объекты
-# Application переживают пересоздание релиза.
-- name: Get ArgoCD release status (if any)
-  shell: helm status argocd -n argocd --output json
-  register: argocd_status
-  changed_when: false
+- name: Check current ArgoCD release state
+  kubernetes.core.helm_info:
+    name: argocd
+    release_namespace: "{{ argocd_namespace }}"
+  register: argocd_release
   failed_when: false
 
+# Guard от ловушки Helm "has no deployed releases": прерванная первая установка
+# оставляет релиз в статусе failed, из которого upgrade выбраться не может.
+# CRD при удалении релиза не трогаются, поэтому объекты Application выживают.
 - name: Remove broken ArgoCD release before install
-  shell: helm uninstall argocd -n argocd --no-hooks
+  kubernetes.core.helm:
+    name: argocd
+    release_namespace: "{{ argocd_namespace }}"
+    state: absent
+    wait: false
   when:
-    - argocd_status.rc == 0
-    - '"deployed" not in (argocd_status.stdout | from_json).info.status'
-  changed_when: true
+    - argocd_release.status is defined
+    - argocd_release.status.status is defined
+    - argocd_release.status.status != 'deployed'
 
-- name: Install ArgoCD via Helm
-  shell: |
-    helm upgrade --install argocd argo/argo-cd \
-      --namespace argocd --create-namespace \
-      --set server.service.type=NodePort \
-      --set server.service.nodePortHttp=30080 \
-      --set server.service.nodePortHttps=30443 \
-      --wait --timeout 10m --atomic
-  register: argocd_install
-  until: argocd_install.rc == 0
-  retries: 2
-  delay: 5
+- name: Install ArgoCD
+  kubernetes.core.helm:
+    name: argocd
+    chart_ref: argo/argo-cd
+    chart_version: "{{ argocd_chart_version }}"
+    release_namespace: "{{ argocd_namespace }}"
+    create_namespace: true
+    values:
+      server:
+        service:
+          type: NodePort
+          nodePortHttp: "{{ argocd_nodeport_http }}"
+          nodePortHttps: "{{ argocd_nodeport_https }}"
+    wait: true
+    wait_timeout: 15m0s
+    atomic: true
 
+# Единственная точка, где Ansible трогает приложения: корневой Application
+# (app-of-apps). Дальше ArgoCD администрирует себя сам через git.
 - name: Bootstrap root Application (app of apps)
-  shell: kubectl apply -f {{ playbook_dir }}/../k8s/argocd/root-app.yaml
-  when: argocd_install.rc == 0
-  changed_when: true
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ playbook_dir }}/../k8s/argocd/root-app.yaml"
