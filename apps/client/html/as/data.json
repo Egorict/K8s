@@ -6,6 +6,13 @@
       "answer": "test a",
       "screenshot": null,
       "createdAt": "2026-08-20T11:58:16.676Z"
+    },
+    {
+      "id": "mt1hwv75",
+      "question": "q",
+      "answer": "w",
+      "screenshot": "screens/q.png",
+      "createdAt": "2026-08-20T12:27:30.929Z"
     }
   ]
 }

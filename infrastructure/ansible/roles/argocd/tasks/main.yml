@@ -43,7 +43,13 @@
   kubernetes.core.helm:
     name: argocd
     chart_ref: argo/argo-cd
-    chart_version: "{{ argocd_chart_version }}"
+    # default(omit, true): пустая строка = версию не передаём вовсе, ставится
+    # последняя. Иначе helm получил бы --version="" и не нашёл бы чарт.
+    chart_version: "{{ argocd_chart_version | default(omit, true) }}"
+    # Обязательно: helm_repository со state: present НЕ обновляет индекс, если
+    # репозиторий уже добавлен. Без этого helm ищет версии в устаревшем кеше
+    # и не видит недавно вышедшие чарты.
+    update_repo_cache: true
     release_namespace: "{{ argocd_namespace }}"
     create_namespace: true
     values:

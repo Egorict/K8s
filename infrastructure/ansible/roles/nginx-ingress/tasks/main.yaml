@@ -8,7 +8,8 @@
   kubernetes.core.helm:
     name: ingress-nginx
     chart_ref: ingress-nginx/ingress-nginx
-    chart_version: "{{ ingress_nginx_version }}"
+    chart_version: "{{ ingress_nginx_version | default(omit, true) }}"
+    update_repo_cache: true   # иначе helm ищет версии в устаревшем индексе
     release_namespace: "{{ ingress_nginx_namespace }}"
     create_namespace: true
     values:

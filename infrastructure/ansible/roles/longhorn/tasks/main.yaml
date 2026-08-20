@@ -77,7 +77,10 @@
   kubernetes.core.helm:
     name: longhorn
     chart_ref: longhorn/longhorn
-    chart_version: "{{ longhorn_chart_version }}"
+    chart_version: "{{ longhorn_chart_version | default(omit, true) }}"
+    # helm_repository со state: present не обновляет индекс, если репозиторий
+    # уже добавлен — без этого helm не увидит новые версии чартов.
+    update_repo_cache: true
     release_namespace: "{{ longhorn_namespace }}"
     create_namespace: true
     values:

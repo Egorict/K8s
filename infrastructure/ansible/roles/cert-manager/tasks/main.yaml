@@ -8,7 +8,8 @@
   kubernetes.core.helm:
     name: cert-manager
     chart_ref: jetstack/cert-manager
-    chart_version: "{{ cert_manager_version }}"
+    chart_version: "{{ cert_manager_version | default(omit, true) }}"
+    update_repo_cache: true   # иначе helm ищет версии в устаревшем индексе
     release_namespace: "{{ cert_manager_namespace }}"
     create_namespace: true
     values:

@@ -1,6 +1,7 @@
 ---
-# Версия чарта запинена ради воспроизводимости (values-схема меняется между мажорами).
-kube_prometheus_stack_version: "87.16.1"
+# Пустое значение = последняя доступная версия. Закрепить стоит, но проверенной:
+#   helm repo update && helm search repo prometheus-community/kube-prometheus-stack --versions | head
+kube_prometheus_stack_version: ""
 monitoring_namespace: monitoring
 
 # Grafana доступна через NodePort, пока Ingress в кластере выключен.

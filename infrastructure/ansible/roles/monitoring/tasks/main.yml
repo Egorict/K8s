@@ -34,7 +34,10 @@
   kubernetes.core.helm:
     name: kube-prometheus-stack
     chart_ref: prometheus-community/kube-prometheus-stack
-    chart_version: "{{ kube_prometheus_stack_version }}"
+    chart_version: "{{ kube_prometheus_stack_version | default(omit, true) }}"
+    # helm_repository со state: present не обновляет индекс, если репозиторий
+    # уже добавлен — без этого helm не увидит новые версии чартов.
+    update_repo_cache: true
     release_namespace: "{{ monitoring_namespace }}"
     create_namespace: true
     values_files:
