@@ -13,8 +13,9 @@
     --muted: #667085;
     --accent: #2563eb;
     --accent-soft: #dbeafe;
-    --mark: #fde68a;
     --shadow: 0 1px 2px rgba(16,24,40,.05), 0 4px 12px rgba(16,24,40,.06);
+    /* Родное соотношение сторон скриншота телефона 1080x2400 */
+    --phone-ratio: 1080 / 2400;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -25,7 +26,6 @@
       --muted: #8b949e;
       --accent: #4b8bff;
       --accent-soft: #16243d;
-      --mark: #6b5300;
       --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.35);
     }
   }
@@ -36,18 +36,18 @@
     background: var(--bg);
     color: var(--text);
     font: 15px/1.55 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
-    padding: 24px 20px 64px;
+    padding: 20px 16px 56px;
   }
   .wrap { max-width: 1200px; margin: 0 auto; }
 
-  header { margin-bottom: 16px; }
-  h1 { font-size: 1.4rem; font-weight: 650; letter-spacing: -.02em; }
-  .sub { color: var(--muted); font-size: .88rem; margin-top: 4px; }
+  header { margin-bottom: 12px; }
+  h1 { font-size: 1.35rem; font-weight: 650; letter-spacing: -.02em; }
+  .sub { color: var(--muted); font-size: .86rem; margin-top: 3px; }
 
   .searchbar {
     position: sticky; top: 0; z-index: 20;
     background: var(--bg);
-    padding: 12px 0 14px;
+    padding: 12px 0 12px;
   }
   .field { position: relative; }
   #q {
@@ -74,79 +74,33 @@
     font-size: 1.1rem; line-height: 1; cursor: pointer; display: none;
   }
   #clear:hover { background: var(--border); color: var(--text); }
-  .count { color: var(--muted); font-size: .85rem; margin-top: 9px; }
+  .count { color: var(--muted); font-size: .84rem; margin-top: 8px; }
 
-  /* Скриншоты — основное содержимое, поэтому сетка, а не список */
+  /* Узкие колонки — скриншоты телефона высокие, широкие карточки выглядели бы
+     нелепо. На телефоне помещаются две колонки, на десктопе — много. */
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
   }
 
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    box-shadow: var(--shadow);
-    overflow: hidden;
-    display: flex; flex-direction: column;
-  }
   .shot {
     width: 100%;
-    aspect-ratio: 16 / 10;
+    aspect-ratio: var(--phone-ratio);
     object-fit: cover;
     object-position: top center;
-    background: var(--bg);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
     cursor: zoom-in;
     display: block;
-    border-bottom: 1px solid var(--border);
   }
-  .noshot {
-    display: flex; align-items: center; justify-content: center;
-    color: var(--muted); font-size: .85rem;
-  }
-  .body { padding: 11px 13px 13px; }
-
-  /* Фрагмент распознанного текста, объясняющий ПОЧЕМУ скрин найден.
-     Показывается только при активном поиске. */
-  .snippet {
-    font-size: .82rem;
-    color: var(--muted);
-    line-height: 1.45;
-    overflow-wrap: anywhere;
-  }
-  mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 1px; }
-
-  /* Наследие записей "вопрос-ответ", добавленных до появления OCR */
-  .legacy-q { font-weight: 600; margin-bottom: 5px; overflow-wrap: anywhere; }
-  .legacy-a { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .93rem; }
-
-  .meta {
-    margin-top: 9px;
-    display: flex; align-items: center; gap: 9px;
-    font-size: .75rem; color: var(--muted);
-  }
-  .reveal {
-    background: none; border: 0; padding: 0;
-    color: var(--accent); font: inherit; font-size: .75rem;
-    cursor: pointer; text-decoration: underline;
-  }
-  .fulltext {
-    display: none;
-    margin-top: 8px; padding: 8px 10px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    font-size: .78rem; color: var(--muted);
-    max-height: 160px; overflow: auto;
-    overflow-wrap: anywhere;
-  }
-  .fulltext.on { display: block; }
 
   .empty {
     grid-column: 1 / -1;
     text-align: center; color: var(--muted);
-    padding: 52px 16px;
+    padding: 48px 16px;
     border: 1px dashed var(--border); border-radius: 14px;
   }
   .empty code {
@@ -155,14 +109,19 @@
     border-radius: 6px; padding: 2px 7px; font-size: .86rem; margin-top: 10px;
   }
 
+  /* Во весь экран скриншот показывается целиком (contain), без обрезки */
   #lightbox {
     position: fixed; inset: 0; z-index: 100;
-    background: rgba(0,0,0,.88);
+    background: rgba(0,0,0,.9);
     display: none; align-items: center; justify-content: center;
-    padding: 24px; cursor: zoom-out;
+    padding: 16px; cursor: zoom-out;
   }
   #lightbox.on { display: flex; }
-  #lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; }
+  #lightbox img {
+    max-width: 100%; max-height: 100%;
+    object-fit: contain;
+    border-radius: 8px;
+  }
 </style>
 </head>
 <body>
@@ -170,13 +129,13 @@
 
   <header>
     <h1>Архив скриншотов</h1>
-    <div class="sub">Поиск идёт по тексту, распознанному на картинках</div>
+    <div class="sub">Поиск по тексту с картинки</div>
   </header>
 
   <div class="searchbar">
     <div class="field">
       <input id="q" type="search" autocomplete="off" autofocus
-             placeholder="Введите любой фрагмент текста со скриншота…">
+             placeholder="Например: обгон, километров в час, знак…">
       <button id="clear" type="button" title="Очистить" aria-label="Очистить">✕</button>
     </div>
     <div class="count" id="count"></div>
@@ -210,72 +169,14 @@
     return d.innerHTML;
   };
 
-  // Всё, по чему ищем: распознанный текст плюс поля старых записей.
-  const haystack = (e) => norm([e.text, e.question, e.answer].filter(Boolean).join('  '));
-
   function matches(entry, query) {
     const nq = norm(query);
     if (!nq) return true;
-    const hay = haystack(entry);
+    const hay = norm(entry.text);
+    // Прямое вхождение — основной случай; пословный разбор выручает, когда
+    // OCR вставил мусор между нужными словами.
     if (hay.includes(nq)) return true;
     return nq.split(' ').every((w) => hay.includes(w));
-  }
-
-  // Кусок текста вокруг совпадения — чтобы было понятно, почему скрин найден.
-  // Сам текст целиком на странице не показывается.
-  function snippet(entry, query) {
-    const text = entry.text || '';
-    if (!text || !query.trim()) return '';
-    const nText = norm(text);
-    const nq = norm(query);
-
-    let at = nText.indexOf(nq);
-    let len = nq.length;
-    if (at < 0) {
-      // Совпало пословно — цепляемся за первое найденное слово.
-      const word = nq.split(' ').find((w) => nText.includes(w));
-      if (!word) return '';
-      at = nText.indexOf(word);
-      len = word.length;
-    }
-
-    const from = Math.max(0, at - 45);
-    const to = Math.min(text.length, at + len + 45);
-    const head = (from > 0 ? '…' : '') + text.slice(from, at);
-    const hit = text.slice(at, at + len);
-    const tail = text.slice(at + len, to) + (to < text.length ? '…' : '');
-    return escapeHtml(head) + '<mark>' + escapeHtml(hit) + '</mark>' + escapeHtml(tail);
-  }
-
-  function cardHtml(e, query) {
-    const shot = e.screenshot
-      ? `<img class="shot" src="${escapeHtml('/as/' + e.screenshot)}" alt="" loading="lazy">`
-      : `<div class="shot noshot">без картинки</div>`;
-
-    // Записи, добавленные до OCR, всё ещё несут вопрос и ответ — показываем их.
-    const legacy = (e.question || e.answer)
-      ? `${e.question ? `<div class="legacy-q">${escapeHtml(e.question)}</div>` : ''}
-         ${e.answer ? `<div class="legacy-a">${escapeHtml(e.answer)}</div>` : ''}`
-      : '';
-
-    const snip = snippet(e, query);
-    const hasText = Boolean(e.text);
-
-    return `
-      <article class="card">
-        ${shot}
-        <div class="body">
-          ${legacy}
-          ${snip ? `<div class="snippet">${snip}</div>` : ''}
-          ${hasText ? `
-            <div class="meta">
-              <button class="reveal" type="button" data-id="${escapeHtml(e.id)}">текст</button>
-              ${e.confidence !== undefined ? `<span>OCR ${e.confidence}%</span>` : ''}
-            </div>
-            <div class="fulltext" id="ft-${escapeHtml(e.id)}">${escapeHtml(e.text)}</div>
-          ` : ''}
-        </div>
-      </article>`;
   }
 
   function render(list, query) {
@@ -295,8 +196,13 @@
     }
     countEl.textContent = query
       ? `Найдено: ${list.length} из ${entries.length}`
-      : `Всего скриншотов: ${entries.length}`;
-    results.innerHTML = list.map((e) => cardHtml(e, query)).join('');
+      : `Всего: ${entries.length}`;
+
+    results.innerHTML = list.map((e) => (
+      e.screenshot
+        ? `<img class="shot" src="${escapeHtml('/as/' + e.screenshot)}" alt="" loading="lazy">`
+        : ''
+    )).join('');
   }
 
   function apply() {
@@ -312,17 +218,10 @@
   });
 
   results.addEventListener('click', (ev) => {
-    const reveal = ev.target.closest('.reveal');
-    if (reveal) {
-      const box = document.getElementById('ft-' + reveal.dataset.id);
-      if (box) box.classList.toggle('on');
-      return;
-    }
     const img = ev.target.closest('img.shot');
-    if (img) {
-      lightImg.src = img.src;
-      lightbox.classList.add('on');
-    }
+    if (!img) return;
+    lightImg.src = img.src;
+    lightbox.classList.add('on');
   });
   lightbox.addEventListener('click', () => lightbox.classList.remove('on'));
   document.addEventListener('keydown', (ev) => {
