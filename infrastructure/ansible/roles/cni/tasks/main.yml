@@ -7,7 +7,6 @@
 # когда apiserver реально обслуживает запросы.
 - name: Wait for API server to become available
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ kubeconfig_path }}"
     kind: Node
   register: api_check
   until: api_check.resources is defined
@@ -45,7 +44,6 @@
 # лимит аннотации last-applied-configuration.
 - name: Install Tigera Calico operator
   kubernetes.core.k8s:
-    kubeconfig: "{{ kubeconfig_path }}"
     state: present
     src: /tmp/tigera-operator.yaml
     server_side_apply:
@@ -54,7 +52,6 @@
 
 - name: Wait for Tigera operator deployment
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ kubeconfig_path }}"
     api_version: apps/v1
     kind: Deployment
     name: tigera-operator
@@ -69,7 +66,6 @@
 # (condition Established) — иначе следующий шаг падает с "no matches for kind".
 - name: Wait for Tigera CRDs to be established
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ kubeconfig_path }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: "{{ item }}"
@@ -86,7 +82,6 @@
 # (playbook.yaml -> vars.pod_network_cidr), иначе маршрутизация подов сломается.
 - name: Configure Calico installation
   kubernetes.core.k8s:
-    kubeconfig: "{{ kubeconfig_path }}"
     state: present
     definition:
       - apiVersion: operator.tigera.io/v1
@@ -112,7 +107,6 @@
 
 - name: Wait for Calico node pods to be ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ kubeconfig_path }}"
     kind: Pod
     namespace: "{{ calico_namespace }}"
     label_selectors:

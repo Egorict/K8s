@@ -142,14 +142,19 @@ jobs:
             git pull origin master
             ansible-playbook infrastructure/ansible/playbook.yaml -c local -i localhost, ${{ github.event.inputs.longhorn_force_reset == 'true' && '-e longhorn_force_reset=true' || '' }} ${{ github.event.inputs.argocd_force_reset == 'true' && '-e argocd_force_reset=true' || '' }}
 
-  # 3. Сборка образов. Каждый образ собирается ТОЛЬКО если менялся его код.
-  #    На PR собираем без push — чтобы проверить, что Dockerfile валиден.
+  # 3. Сборка и сканирование образов. Каждый образ собирается ТОЛЬКО если менялся
+  #    его код. На PR собираем без push — чтобы проверить, что Dockerfile валиден.
+  #
+  #    ВАЖНО: здесь права намеренно ТОЛЬКО НА ЧТЕНИЕ. В этой джобе выполняется
+  #    сторонний сканер, а такие действия уже компрометировали (см. комментарий
+  #    к шагу сканирования). Запись в репозиторий вынесена в отдельную джобу
+  #    release ниже, чтобы у стороннего кода не было доступа к git-токену.
   build:
     needs: [changes, lint-and-test]
     if: needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write        # нужно для бот-коммита с новыми тегами
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -189,9 +194,16 @@ jobs:
 
       # Скан на уязвимости ПОСЛЕ сборки, но до обновления тегов в git:
       # уязвимый образ не должен доехать до кластера.
+      #
+      # Версия v0.36.0 с префиксом "v" выбрана не случайно. В марте 2026 у этого
+      # action угнали теги: 76 из 77 (диапазон 0.0.1-0.34.2, БЕЗ префикса) были
+      # перезаписаны на код, ворующий credentials из CI. Мейнтейнеры выпустили
+      # заново теги с префиксом v, указывающие на легитимные коммиты; v0.36.0
+      # выпущена уже после инцидента.
+      # Ещё надёжнее — пин по полному SHA коммита: теги подвижны, SHA нет.
       - name: Scan client image
         if: needs.changes.outputs.client == 'true'
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.CLIENT_IMAGE_NAME }}:${{ github.sha }}
           severity: 'CRITICAL,HIGH'
@@ -200,19 +212,34 @@ jobs:
 
       - name: Scan server image
         if: needs.changes.outputs.server == 'true'
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.SERVER_IMAGE_NAME }}:${{ github.sha }}
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
           ignore-unfixed: true
 
+  # 4. Обновление тегов в git. Отдельная джоба — единственная с правом записи.
+  #    Здесь НЕ выполняется ни одного стороннего action, кроме официального
+  #    checkout: так угон стороннего сканера не даёт доступа к git-токену.
+  release:
+    needs: [changes, lint-and-test, build]
+    if: >-
+      github.event_name == 'push' &&
+      (needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       # Ставим yq явно и по фиксированной версии. Action mikefarah/yq запускает
       # бинарь внутри своего контейнера и на PATH раннера его НЕ кладёт, а
       # полагаться на предустановленный в образе — значит зависеть от того,
       # что GitHub положит в раннер завтра.
       - name: Install yq
-        if: github.event_name != 'pull_request'
         run: |
           sudo curl -fsSL -o /usr/local/bin/yq \
             https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
@@ -223,7 +250,6 @@ jobs:
       # ЛЮБУЮ строку, начинающуюся с tag:, и сломался бы при появлении второго
       # такого ключа в файле.
       - name: Update image tags
-        if: github.event_name != 'pull_request'
         run: |
           if [ "${{ needs.changes.outputs.server }}" = "true" ]; then
             yq -i '.image.tag = "${{ github.sha }}"' "${{ env.SERVER_VALUES_FILE }}"
@@ -236,7 +262,6 @@ jobs:
       # Пуш с ретраем и rebase: если параллельный коммит успел прилететь,
       # раньше здесь был отказ non-fast-forward и падение всей джобы.
       - name: Commit and push updated tags
-        if: github.event_name == 'push'
         run: |
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"

@@ -13,6 +13,14 @@
     single_node: true   # single-node: снимаем control-plane taint, чтобы нагрузки шедулились.
                         # При добавлении worker-нод поставьте false.
 
+  # Путь к kubeconfig для модулей kubernetes.core и для helm.
+  # Именно через окружение, а НЕ через параметр kubeconfig: тот резолвится на
+  # контроллере ДО become, то есть от обычного пользователя, который не имеет
+  # доступа к /root/.kube/config (права 0600, владелец root).
+  environment:
+    K8S_AUTH_KUBECONFIG: /root/.kube/config
+    KUBECONFIG: /root/.kube/config
+
   roles:
     - common
     - containerd
