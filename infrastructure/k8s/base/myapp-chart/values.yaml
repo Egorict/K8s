@@ -1,7 +1,7 @@
 replicaCount: 1
 image:
   repository: ermakov880/devops-project
-  tag: f21e501a2ce1c342d6d0463b5205859ba31a04e3
+  tag: 320f6e3ec0faea6fe5e000be8f2b5c9add929f27
   # IfNotPresent, а не Always: CI деплоит по неизменяемому тегу — git SHA
   # (см. deploy.yaml, шаг "Update values.yaml files with new tag"). Такой тег
   # однозначно определяет содержимое образа, поэтому перепроверять реестр при
@@ -11,11 +11,11 @@ image:
   pullPolicy: IfNotPresent
 service:
   type: NodePort
-  port: 80          # порт Service внутри кластера
-  targetPort: 8080  # порт контейнера: nginx-unprivileged слушает 8080 (см. nginx.conf).
-                    # Единственный источник правды — на него ссылаются Deployment,
-                    # Service, пробы и NetworkPolicy.
-  nodePort: 30081   # порт, по которому будет доступно приложение
+  port: 80 # порт Service внутри кластера
+  targetPort: 8080 # порт контейнера: nginx-unprivileged слушает 8080 (см. nginx.conf).
+  # Единственный источник правды — на него ссылаются Deployment,
+  # Service, пробы и NetworkPolicy.
+  nodePort: 30081 # порт, по которому будет доступно приложение
 # Ingress отключён – используем NodePort
 ingress:
   enabled: false
