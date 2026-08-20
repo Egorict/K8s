@@ -1,0 +1,13 @@
+{
+  "name": "client-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Локальные инструменты для архива скриншотов (в образ не попадают)",
+  "scripts": {
+    "add": "node tools/add-entry.js",
+    "list": "node tools/add-entry.js --list"
+  },
+  "dependencies": {
+    "tesseract.js": "^7.0.0"
+  }
+}

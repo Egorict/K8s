@@ -1,22 +1,28 @@
 #!/usr/bin/env node
 /**
- * Пополнение архива "скрин - вопрос - ответ".
+ * Пополнение архива скриншотов с распознаванием текста.
+ *
+ * Вы даёте только картинку — текст с неё вытаскивает OCR (tesseract.js,
+ * локально, без внешних сервисов) и сохраняет рядом со скриншотом. На странице
+ * текст не показывается, но по нему идёт поиск.
  *
  * Интерактивно (основной режим):
  *   node tools/add-entry.js
- *     Спрашивает скрин, вопрос и ответ, сохраняет запись и сразу начинает
- *     следующую — и так по кругу. Esc завершает работу; запись, начатая но
- *     не доведённая до конца, НЕ сохраняется.
+ *     Спрашивает путь к картинке, распознаёт, сохраняет — и спрашивает снова.
+ *     Можно указать ПАПКУ: обработаются все картинки внутри.
+ *     Esc — закончить. Незавершённая запись не сохраняется.
  *
- * Разово, без вопросов:
- *   node tools/add-entry.js -i shot.png -q "Вопрос" -a "Ответ"
+ * Разово:
+ *   node tools/add-entry.js -i shot.png
+ *   node tools/add-entry.js -i ~/screens/          (вся папка)
  *
  * Прочее:
- *   node tools/add-entry.js --list            показать все записи
- *   node tools/add-entry.js --remove <id>     удалить запись
+ *   node tools/add-entry.js --list             показать записи
+ *   node tools/add-entry.js --remove <id>      удалить запись
+ *   node tools/add-entry.js --lang rus+eng     языки OCR (по умолчанию rus+eng)
+ *   node tools/add-entry.js --reocr            перераспознать все записи заново
  *
- * Скрипт только правит файлы на диске. Коммит и пуш — вручную, когда сочтёте
- * нужным.
+ * Скрипт только правит файлы на диске. Коммит и пуш — вручную.
  */
 
 const fs = require('fs');
@@ -29,27 +35,24 @@ const SCREENS_DIR = path.join(AS_DIR, 'screens');
 const DATA_FILE = path.join(AS_DIR, 'data.json');
 
 const ALLOWED_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif']);
+const DEFAULT_LANG = 'rus+eng';
 
-// Сигнал "пользователь нажал Esc". Отдельный класс, чтобы отличать отмену
-// от настоящей ошибки и не глушить вторую вместе с первой.
 class Aborted extends Error {}
 
 // ---------- аргументы ----------
 
 function parseArgs(argv) {
-  const out = { flags: new Set() };
+  const out = { flags: new Set(), lang: DEFAULT_LANG };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--list' || a === '--help' || a === '-h') {
+    if (a === '--list' || a === '--help' || a === '-h' || a === '--reocr') {
       out.flags.add(a.replace(/^-+/, ''));
     } else if (a === '--remove') {
       out.remove = argv[++i];
+    } else if (a === '--lang') {
+      out.lang = argv[++i];
     } else if (a === '-i' || a === '--image') {
       out.image = argv[++i];
-    } else if (a === '-q' || a === '--question') {
-      out.question = argv[++i];
-    } else if (a === '-a' || a === '--answer') {
-      out.answer = argv[++i];
     }
   }
   return out;
@@ -80,8 +83,6 @@ const TRANSLIT = {
   ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
 };
 
-// Кириллица в именах файлов создаёт проблемы при percent-кодировании в URL,
-// поэтому имя скриншота транслитерируем из текста вопроса.
 function slugify(text) {
   return String(text)
     .toLowerCase()
@@ -90,7 +91,7 @@ function slugify(text) {
     .join('')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'entry';
+    .slice(0, 40) || 'shot';
 }
 
 function uniqueName(base, ext) {
@@ -103,6 +104,95 @@ function uniqueName(base, ext) {
   return name;
 }
 
+// ---------- OCR ----------
+
+// Воркер поднимается несколько секунд (грузит языковые модели), поэтому
+// создаём его один раз на сессию и переиспользуем для всех картинок.
+let workerPromise = null;
+
+function getWorker(lang) {
+  if (!workerPromise) {
+    const { createWorker } = require('tesseract.js');
+    console.log(`  (первый запуск: загружаю модели «${lang}», это разово)`);
+    workerPromise = createWorker(lang);
+  }
+  return workerPromise;
+}
+
+async function closeWorker() {
+  if (!workerPromise) return;
+  try {
+    const worker = await workerPromise;
+    await worker.terminate();
+  } catch {
+    /* воркер и так мёртв — гасить нечего */
+  }
+  workerPromise = null;
+}
+
+async function recognize(imagePath, lang) {
+  const worker = await getWorker(lang);
+  const { data } = await worker.recognize(imagePath);
+  // Схлопываем пробелы и переводы строк: OCR любит рвать текст, а для поиска
+  // важны сами слова, а не вёрстка.
+  const text = (data.text || '').replace(/\s+/g, ' ').trim();
+  return { text, confidence: Math.round(data.confidence || 0) };
+}
+
+// ---------- источник картинок ----------
+
+// Принимает путь к файлу или к папке; возвращает список картинок.
+function resolveImages(rawPath) {
+  const p = path.resolve(rawPath.replace(/^["']|["']$/g, ''));
+  if (!fs.existsSync(p)) return { error: `Не найдено: ${p}` };
+
+  if (fs.statSync(p).isDirectory()) {
+    const files = fs.readdirSync(p)
+      .filter((f) => ALLOWED_EXT.has(path.extname(f).toLowerCase()))
+      .map((f) => path.join(p, f))
+      .sort();
+    if (!files.length) return { error: `В папке нет картинок: ${p}` };
+    return { files };
+  }
+
+  const ext = path.extname(p).toLowerCase();
+  if (!ALLOWED_EXT.has(ext)) {
+    return { error: `Формат "${ext}" не поддерживается. Допустимо: ${[...ALLOWED_EXT].join(', ')}` };
+  }
+  return { files: [p] };
+}
+
+// Распознаёт и сохраняет одну картинку. Копирование в архив происходит ПОСЛЕ
+// успешного OCR — при сбое не остаётся осиротевших файлов.
+async function ingest(src, data, lang) {
+  const label = path.basename(src);
+  process.stdout.write(`  ${label} … `);
+
+  let ocr = { text: '', confidence: 0 };
+  try {
+    ocr = await recognize(src, lang);
+  } catch (err) {
+    console.log(`OCR не удался (${err.message}) — сохраняю без текста`);
+  }
+
+  const base = slugify(ocr.text.slice(0, 60)) || slugify(path.parse(src).name);
+  const name = uniqueName(base, path.extname(src).toLowerCase());
+  fs.copyFileSync(src, path.join(SCREENS_DIR, name));
+
+  data.entries.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    screenshot: `screens/${name}`,
+    text: ocr.text,
+    confidence: ocr.confidence,
+    createdAt: new Date().toISOString(),
+  });
+  writeData(data);
+
+  const words = ocr.text ? ocr.text.split(' ').length : 0;
+  console.log(ocr.text ? `${words} слов, точность ${ocr.confidence}%` : 'текст не распознан');
+  return true;
+}
+
 // ---------- ввод с поддержкой Esc ----------
 
 function createInput() {
@@ -113,17 +203,13 @@ function createInput() {
     readline.emitKeypressEvents(process.stdin);
     process.stdin.on('keypress', (_str, key) => {
       if (!key) return;
-      const isEsc = key.name === 'escape';
-      const isCtrlC = key.ctrl && key.name === 'c';
-      if (!isEsc && !isCtrlC) return;
+      if (key.name !== 'escape' && !(key.ctrl && key.name === 'c')) return;
       if (state.aborted) return;
       state.aborted = true;
-      // Прерываем висящий вопрос, чтобы поток управления вышел из цикла.
       if (state.rejectPending) state.rejectPending(new Aborted());
       rl.close();
     });
   }
-
   return state;
 }
 
@@ -141,68 +227,6 @@ function ask(state, prompt) {
   });
 }
 
-// Ответ может занимать несколько строк: конец — пустая строка.
-async function askMultiline(state, prompt) {
-  console.log(prompt);
-  const lines = [];
-  for (;;) {
-    const line = await ask(state, lines.length ? '   │ ' : '   │ ');
-    if (line === '') {
-      if (lines.length) return lines.join('\n');
-      continue; // пустой ввод в самом начале — просто ждём дальше
-    }
-    lines.push(line);
-  }
-}
-
-// ---------- сбор одной записи ----------
-
-// Возвращает готовый объект. Ничего не пишет на диск: копирование картинки и
-// сохранение происходят ПОСЛЕ того, как все три поля собраны. Так отмена на
-// любом шаге не оставляет ни осиротевших файлов, ни половинчатых записей.
-async function collectEntry(state, index) {
-  console.log(`\n${'─'.repeat(52)}`);
-  console.log(`Запись #${index}`);
-
-  const imagePath = await ask(state, ' Скриншот (путь, Enter — без картинки): ');
-  const question = await ask(state, ' Вопрос: ');
-  if (!question) {
-    console.log(' ⚠ Вопрос пустой — запись пропущена (по нему идёт поиск).');
-    return null;
-  }
-  const answer = await askMultiline(state, ' Ответ (пустая строка — закончить):');
-  if (!answer) {
-    console.log(' ⚠ Ответ пустой — запись пропущена.');
-    return null;
-  }
-
-  let screenshot = null;
-  if (imagePath) {
-    // Кавычки появляются, если файл перетащили в терминал.
-    const src = path.resolve(imagePath.replace(/^["']|["']$/g, ''));
-    if (!fs.existsSync(src)) {
-      console.log(` ⚠ Файл не найден: ${src} — запись пропущена.`);
-      return null;
-    }
-    const ext = path.extname(src).toLowerCase();
-    if (!ALLOWED_EXT.has(ext)) {
-      console.log(` ⚠ Формат "${ext}" не поддерживается — запись пропущена.`);
-      return null;
-    }
-    const name = uniqueName(slugify(question), ext);
-    fs.copyFileSync(src, path.join(SCREENS_DIR, name));
-    screenshot = `screens/${name}`;
-  }
-
-  return {
-    id: Date.now().toString(36),
-    question,
-    answer,
-    screenshot,
-    createdAt: new Date().toISOString(),
-  };
-}
-
 // ---------- команды ----------
 
 function cmdList() {
@@ -213,9 +237,12 @@ function cmdList() {
   }
   console.log(`Записей: ${entries.length}\n`);
   entries.forEach((e, i) => {
-    console.log(`${String(i + 1).padStart(3)}. [${e.id}] ${e.question}`);
-    console.log(`     ответ: ${e.answer.split('\n')[0].slice(0, 70)}`);
-    console.log(`     скрин: ${e.screenshot || '—'}\n`);
+    // Старые записи (вопрос-ответ) и новые (OCR) показываем одинаково удобно.
+    const preview = e.text || [e.question, e.answer].filter(Boolean).join(' — ') || '—';
+    console.log(`${String(i + 1).padStart(3)}. [${e.id}] ${e.screenshot || 'без картинки'}`);
+    console.log(`     ${preview.slice(0, 90)}${preview.length > 90 ? '…' : ''}`);
+    if (e.confidence !== undefined) console.log(`     точность OCR: ${e.confidence}%`);
+    console.log('');
   });
 }
 
@@ -232,70 +259,93 @@ function cmdRemove(id) {
     if (fs.existsSync(file)) fs.unlinkSync(file);
   }
   writeData(data);
-  console.log(`✔ Удалено: ${removed.question}`);
+  console.log(`✔ Удалено: ${removed.screenshot || removed.question || removed.id}`);
 }
 
-// Разовое добавление флагами — без цикла и без интерактива.
-function cmdAddOnce(args) {
-  let screenshot = null;
-  if (args.image) {
-    const src = path.resolve(args.image.replace(/^["']|["']$/g, ''));
-    if (!fs.existsSync(src)) {
-      console.error(`✖ Файл не найден: ${src}`);
-      process.exit(1);
-    }
-    const ext = path.extname(src).toLowerCase();
-    if (!ALLOWED_EXT.has(ext)) {
-      console.error(`✖ Формат "${ext}" не поддерживается. Допустимо: ${[...ALLOWED_EXT].join(', ')}`);
-      process.exit(1);
-    }
-    const name = uniqueName(slugify(args.question), ext);
-    fs.copyFileSync(src, path.join(SCREENS_DIR, name));
-    screenshot = `screens/${name}`;
-  }
-
+// Перераспознать уже добавленные картинки — пригодится, если сменили язык
+// или добавляли записи до появления OCR.
+async function cmdReocr(lang) {
   const data = readData();
-  data.entries.push({
-    id: Date.now().toString(36),
-    question: args.question,
-    answer: args.answer,
-    screenshot,
-    createdAt: new Date().toISOString(),
-  });
-  writeData(data);
-  console.log(`✔ Добавлено. Всего записей: ${data.entries.length}`);
-  return 1;
+  const withImages = data.entries.filter((e) => e.screenshot);
+  if (!withImages.length) {
+    console.log('Нет записей с картинками.');
+    return 0;
+  }
+  console.log(`Перераспознаю ${withImages.length} картинок (язык: ${lang})\n`);
+
+  let done = 0;
+  for (const entry of withImages) {
+    const file = path.join(AS_DIR, entry.screenshot);
+    if (!fs.existsSync(file)) {
+      console.log(`  ${entry.screenshot} … файл отсутствует, пропуск`);
+      continue;
+    }
+    process.stdout.write(`  ${entry.screenshot} … `);
+    try {
+      const ocr = await recognize(file, lang);
+      entry.text = ocr.text;
+      entry.confidence = ocr.confidence;
+      writeData(data);
+      console.log(`${ocr.text.split(' ').length} слов, точность ${ocr.confidence}%`);
+      done++;
+    } catch (err) {
+      console.log(`ошибка: ${err.message}`);
+    }
+  }
+  return done;
+}
+
+function cmdAddOnce(args) {
+  const resolved = resolveImages(args.image);
+  if (resolved.error) {
+    console.error(`✖ ${resolved.error}`);
+    process.exit(1);
+  }
+  const data = readData();
+  return (async () => {
+    let n = 0;
+    for (const file of resolved.files) {
+      if (await ingest(file, data, args.lang)) n++;
+    }
+    return n;
+  })();
 }
 
 async function cmdAddLoop(args) {
   if (!process.stdin.isTTY) {
     console.error('✖ Интерактивный режим требует терминала.');
-    console.error('  Для скриптов: node tools/add-entry.js -i shot.png -q "Вопрос" -a "Ответ"');
+    console.error('  Для скриптов: node tools/add-entry.js -i shot.png');
     process.exit(1);
   }
 
-  console.log('Добавление записей в архив.');
-  console.log('Заполняйте по кругу; Esc — закончить и запушить.');
-  console.log('Незавершённая запись при выходе не сохраняется.');
+  console.log('Добавление скриншотов. Текст с картинки распознаётся автоматически.');
+  console.log('Можно указать файл или папку целиком. Esc — закончить.\n');
 
   const state = createInput();
   const data = readData();
   const startCount = data.entries.length;
-  let index = startCount + 1;
 
   try {
     for (;;) {
-      const entry = await collectEntry(state, index);
-      if (entry) {
-        data.entries.push(entry);
-        writeData(data); // сохраняем сразу — прерывание не потеряет прошлые записи
-        console.log(` ✔ Сохранено (всего: ${data.entries.length})`);
-        index++;
+      const input = await ask(state, ' Картинка или папка: ');
+      if (!input) continue;
+
+      const resolved = resolveImages(input);
+      if (resolved.error) {
+        console.log(` ⚠ ${resolved.error}`);
+        continue;
       }
+      if (resolved.files.length > 1) {
+        console.log(` Найдено картинок: ${resolved.files.length}`);
+      }
+      for (const file of resolved.files) {
+        await ingest(file, data, args.lang);
+      }
+      console.log(` Всего в архиве: ${data.entries.length}\n`);
     }
   } catch (err) {
     if (!(err instanceof Aborted)) throw err;
-    console.log('\n\nЗавершение — незаконченная запись отброшена.');
+    console.log('\n\nЗавершение.');
   } finally {
     state.rl.close();
     if (process.stdin.isTTY) process.stdin.pause();
@@ -323,15 +373,28 @@ async function cmdAddLoop(args) {
     return;
   }
 
-  const oneShot = Boolean(args.question && args.answer);
-  const added = oneShot ? cmdAddOnce(args) : await cmdAddLoop(args);
+  let added = 0;
+  try {
+    if (args.flags.has('reocr')) {
+      added = await cmdReocr(args.lang);
+      console.log(`\nПерераспознано записей: ${added}`);
+    } else if (args.image) {
+      added = await cmdAddOnce(args);
+      console.log(`\nДобавлено: ${added}`);
+    } else {
+      added = await cmdAddLoop(args);
+      if (added > 0) {
+        console.log(`\nДобавлено скриншотов: ${added}. Файлы обновлены на диске.`);
+      } else {
+        console.log('Ничего не добавлено.');
+      }
+    }
+  } finally {
+    await closeWorker();
+  }
 
   if (added > 0) {
-    const word = added === 1 ? 'запись' : 'записей';
-    console.log(`\nДобавлено ${added} ${word}. Файлы обновлены на диске.`);
     console.log('Выложить в кластер: git add apps/client/html/as && git commit && git push');
-  } else {
-    console.log('Ничего не добавлено.');
   }
 })().catch((err) => {
   console.error(`✖ ${err.message}`);
