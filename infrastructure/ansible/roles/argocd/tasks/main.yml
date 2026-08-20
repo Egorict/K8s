@@ -50,8 +50,10 @@
       server:
         service:
           type: NodePort
-          nodePortHttp: "{{ argocd_nodeport_http }}"
-          nodePortHttps: "{{ argocd_nodeport_https }}"
+          # | int обязателен: nodePort в спеке Service — целое число, строка
+          # "30080" отрендерилась бы в невалидный манифест.
+          nodePortHttp: "{{ argocd_nodeport_http | int }}"
+          nodePortHttps: "{{ argocd_nodeport_https | int }}"
     wait: true
     wait_timeout: 15m0s
     atomic: true

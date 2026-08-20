@@ -16,8 +16,9 @@
         service:
           type: "{{ ingress_nginx_service_type }}"
           nodePorts:
-            http: "{{ ingress_nginx_http_port }}"
-            https: "{{ ingress_nginx_https_port }}"
+            # | int обязателен: nodePort в спеке Service — целое число.
+            http: "{{ ingress_nginx_http_port | int }}"
+            https: "{{ ingress_nginx_https_port | int }}"
         ingressClassResource:
           enabled: true
           default: true

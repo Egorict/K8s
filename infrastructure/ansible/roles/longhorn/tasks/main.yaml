@@ -83,7 +83,8 @@
     values:
       persistence:
         defaultClass: true
-        defaultClassReplicaCount: "{{ longhorn_replica_count }}"
+        # | int обязателен: без него сюда уходит строка "1", а чарт ждёт число.
+        defaultClassReplicaCount: "{{ longhorn_replica_count | int }}"
     wait: true
     wait_timeout: 25m0s
     atomic: true

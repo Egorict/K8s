@@ -207,11 +207,17 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
 
+      # Ставим yq явно и по фиксированной версии. Action mikefarah/yq запускает
+      # бинарь внутри своего контейнера и на PATH раннера его НЕ кладёт, а
+      # полагаться на предустановленный в образе — значит зависеть от того,
+      # что GitHub положит в раннер завтра.
       - name: Install yq
         if: github.event_name != 'pull_request'
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: yq --version
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
 
       # yq правит именно поле image.tag. Прежний `sed "s|tag:.*|"` заменял
       # ЛЮБУЮ строку, начинающуюся с tag:, и сломался бы при появлении второго
