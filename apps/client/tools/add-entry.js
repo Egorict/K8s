@@ -6,8 +6,7 @@
  *   node tools/add-entry.js
  *     Спрашивает скрин, вопрос и ответ, сохраняет запись и сразу начинает
  *     следующую — и так по кругу. Esc завершает работу; запись, начатая но
- *     не доведённая до конца, НЕ сохраняется. В конце всё коммитится и
- *     пушится в репозиторий.
+ *     не доведённая до конца, НЕ сохраняется.
  *
  * Разово, без вопросов:
  *   node tools/add-entry.js -i shot.png -q "Вопрос" -a "Ответ"
@@ -15,13 +14,14 @@
  * Прочее:
  *   node tools/add-entry.js --list            показать все записи
  *   node tools/add-entry.js --remove <id>     удалить запись
- *   node tools/add-entry.js --no-push         не пушить в конце
+ *
+ * Скрипт только правит файлы на диске. Коммит и пуш — вручную, когда сочтёте
+ * нужным.
  */
 
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const { execFileSync } = require('child_process');
 
 const HTML_DIR = path.join(__dirname, '..', 'html');
 const AS_DIR = path.join(HTML_DIR, 'as');
@@ -40,7 +40,7 @@ function parseArgs(argv) {
   const out = { flags: new Set() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--list' || a === '--help' || a === '-h' || a === '--no-push') {
+    if (a === '--list' || a === '--help' || a === '-h') {
       out.flags.add(a.replace(/^-+/, ''));
     } else if (a === '--remove') {
       out.remove = argv[++i];
@@ -152,69 +152,6 @@ async function askMultiline(state, prompt) {
       continue; // пустой ввод в самом начале — просто ждём дальше
     }
     lines.push(line);
-  }
-}
-
-// ---------- git ----------
-
-function repoRoot() {
-  return execFileSync('git', ['rev-parse', '--show-toplevel'], {
-    cwd: __dirname,
-    encoding: 'utf8',
-  }).trim();
-}
-
-function git(root, args) {
-  return execFileSync('git', args, { cwd: root, encoding: 'utf8' });
-}
-
-function pushChanges(addedCount) {
-  let root;
-  try {
-    root = repoRoot();
-  } catch {
-    console.error('✖ Это не git-репозиторий — пропускаю пуш.');
-    return;
-  }
-
-  try {
-    // Добавляем ТОЛЬКО каталог архива: иначе в коммит уехала бы вся посторонняя
-    // работа, которая сейчас лежит в рабочем дереве.
-    git(root, ['add', AS_DIR]);
-
-    // git diff --staged --quiet возвращает 1, когда изменения есть,
-    // поэтому "успех" здесь означает, что коммитить нечего.
-    let hasChanges = true;
-    try {
-      git(root, ['diff', '--staged', '--quiet']);
-      hasChanges = false;
-    } catch {
-      hasChanges = true;
-    }
-    if (!hasChanges) {
-      console.log('Изменений для коммита нет.');
-      return;
-    }
-
-    const word = addedCount === 1 ? 'запись' : 'записей';
-    git(root, ['commit', '-m', `archive: +${addedCount} ${word}`]);
-    console.log('✔ Коммит создан');
-
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        git(root, ['push']);
-        console.log('✔ Запушено в репозиторий');
-        return;
-      } catch (err) {
-        if (attempt === 3) throw err;
-        console.log(`  пуш отклонён, подтягиваю изменения (попытка ${attempt}/3)`);
-        git(root, ['pull', '--rebase']);
-      }
-    }
-  } catch (err) {
-    const detail = (err.stderr || err.message || '').toString().trim();
-    console.error(`✖ Не удалось запушить: ${detail}`);
-    console.error('  Коммит сохранён локально — запушите вручную: git push');
   }
 }
 
@@ -389,10 +326,11 @@ async function cmdAddLoop(args) {
   const oneShot = Boolean(args.question && args.answer);
   const added = oneShot ? cmdAddOnce(args) : await cmdAddLoop(args);
 
-  if (added > 0 && !args.flags.has('no-push')) {
-    console.log('');
-    pushChanges(added);
-  } else if (added === 0) {
+  if (added > 0) {
+    const word = added === 1 ? 'запись' : 'записей';
+    console.log(`\nДобавлено ${added} ${word}. Файлы обновлены на диске.`);
+    console.log('Выложить в кластер: git add apps/client/html/as && git commit && git push');
+  } else {
     console.log('Ничего не добавлено.');
   }
 })().catch((err) => {

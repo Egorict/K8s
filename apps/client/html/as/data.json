@@ -55,6 +55,20 @@
       "answer": "fgh",
       "screenshot": null,
       "createdAt": "2026-08-20T12:50:39.747Z"
+    },
+    {
+      "id": "mt1j58qk",
+      "question": "длинная линяя рабочего стола",
+      "answer": "да",
+      "screenshot": "screens/dlinnaya-linyaya-rabochego-stola.jpg",
+      "createdAt": "2026-08-20T13:02:01.340Z"
+    },
+    {
+      "id": "mt1j5ism",
+      "question": "типо телефон",
+      "answer": "нет",
+      "screenshot": "screens/tipo-telefon.jpg",
+      "createdAt": "2026-08-20T13:02:14.374Z"
     }
   ]
 }
