@@ -1,122 +1,398 @@
 <!DOCTYPE html>
-<html lang="en-us">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Unity WebGL Player | ReturnMyEyes</title>
-    <link rel="shortcut icon" href="TemplateData/favicon.ico">
-    <link rel="stylesheet" href="TemplateData/style.css">
-  </head>
-  <body>
-    <div id="unity-container" class="unity-desktop">
-      <canvas id="unity-canvas" width=960 height=600 tabindex="-1"></canvas>
-      <div id="unity-loading-bar">
-        <div id="unity-logo"></div>
-        <div id="unity-progress-bar-empty">
-          <div id="unity-progress-bar-full"></div>
-        </div>
-      </div>
-      <div id="unity-warning"> </div>
-      <div id="unity-footer">
-        <div id="unity-webgl-logo"></div>
-        <div id="unity-fullscreen-button"></div>
-        <div id="unity-build-title">ReturnMyEyes</div>
-      </div>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Manager</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background: #f4f6fa;
+            display: flex;
+            justify-content: center;
+            padding: 2rem 1rem;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+        }
+        h1 {
+            font-weight: 600;
+            font-size: 2rem;
+            color: #1e293b;
+            margin-bottom: 1.5rem;
+            letter-spacing: -0.5px;
+        }
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 1.8rem 2rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+            margin-bottom: 2rem;
+            transition: box-shadow 0.2s;
+        }
+        .card:hover {
+            box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+        }
+        .card-title {
+            font-weight: 600;
+            font-size: 1.2rem;
+            color: #0f172a;
+            margin-bottom: 1.2rem;
+        }
+        .form-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: flex-end;
+        }
+        .form-group .field {
+            flex: 1 1 180px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: #334155;
+            margin-bottom: 0.3rem;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 0.6rem 0.8rem;
+            border: 1px solid #d1d5db;
+            border-radius: 10px;
+            font-size: 1rem;
+            background: #f8fafc;
+            transition: 0.2s;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.2);
+            background: white;
+        }
+        .btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 0.65rem 1.8rem;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            flex-shrink: 0;
+        }
+        .btn:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(59,130,246,0.3);
+        }
+        .btn:active {
+            transform: translateY(0);
+        }
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #1e293b;
+        }
+        .btn-secondary:hover {
+            background: #cbd5e1;
+            box-shadow: none;
+        }
+        .status {
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            color: #475569;
+            min-height: 1.5rem;
+        }
+        .status.success {
+            color: #16a34a;
+        }
+        .status.error {
+            color: #dc2626;
+        }
+        .items-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+        .item-row {
+            background: #f8fafc;
+            border-radius: 10px;
+            padding: 0.8rem 1.2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 4px solid #3b82f6;
+            transition: 0.15s;
+        }
+        .item-row:hover {
+            background: #f1f5f9;
+        }
+        .item-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.1rem;
+        }
+        .item-name {
+            font-weight: 600;
+            color: #0f172a;
+        }
+        .item-value {
+            color: #475569;
+            font-size: 0.95rem;
+        }
+        .item-date {
+            color: #94a3b8;
+            font-size: 0.75rem;
+            margin-top: 0.2rem;
+        }
+        .item-id {
+            color: #94a3b8;
+            font-size: 0.75rem;
+            background: #e2e8f0;
+            padding: 0.2rem 0.6rem;
+            border-radius: 20px;
+        }
+        .empty-state {
+            color: #94a3b8;
+            text-align: center;
+            padding: 2rem 0;
+            font-style: italic;
+        }
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+        .refresh-icon {
+            font-size: 1.2rem;
+            cursor: pointer;
+            margin-left: 0.5rem;
+            color: #64748b;
+            transition: 0.2s;
+        }
+        .refresh-icon:hover {
+            color: #3b82f6;
+            transform: rotate(45deg);
+        }
+        @media (max-width: 600px) {
+            .form-group .field {
+                flex: 1 1 100%;
+            }
+            .card {
+                padding: 1.2rem;
+            }
+            .item-row {
+                flex-wrap: wrap;
+                gap: 0.3rem;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📦 Data Manager</h1>
+
+    <!-- Карточка формы -->
+    <div class="card">
+        <div class="card-title">✏️ Создать новую запись</div>
+        <form id="createForm" class="form-group">
+            <div class="field">
+                <label for="nameInput">Имя</label>
+                <input type="text" id="nameInput" placeholder="Введите имя" required>
+            </div>
+            <div class="field">
+                <label for="valueInput">Значение</label>
+                <input type="text" id="valueInput" placeholder="Введите значение">
+            </div>
+            <button type="submit" class="btn" id="sendBtn">📨 Отправить</button>
+        </form>
+        <div id="formStatus" class="status"></div>
     </div>
-    <script>
 
-      var container = document.querySelector("#unity-container");
-      var canvas = document.querySelector("#unity-canvas");
-      var loadingBar = document.querySelector("#unity-loading-bar");
-      var progressBarFull = document.querySelector("#unity-progress-bar-full");
-      var fullscreenButton = document.querySelector("#unity-fullscreen-button");
-      var warningBanner = document.querySelector("#unity-warning");
+    <!-- Карточка со списком -->
+    <div class="card">
+        <div class="card-title" style="display: flex; align-items: center; justify-content: space-between;">
+            <span>📋 Все записи</span>
+            <span class="refresh-icon" id="refreshBtn" title="Обновить список">⟳</span>
+        </div>
+        <div id="itemsContainer" class="items-list">
+            <div class="empty-state">Загрузка...</div>
+        </div>
+    </div>
+</div>
 
-      // Shows a temporary message banner/ribbon for a few seconds, or
-      // a permanent error message on top of the canvas if type=='error'.
-      // If type=='warning', a yellow highlight color is used.
-      // Modify or remove this function to customize the visually presented
-      // way that non-critical warnings and error messages are presented to the
-      // user.
-      function unityShowBanner(msg, type) {
-        function updateBannerVisibility() {
-          warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
+<script>
+    (function() {
+        // --- Конфигурация ---
+        // Относительный путь: браузер обращается к тому же origin (клиенту),
+        // а nginx проксирует /api на сервер внутри кластера. Никаких хардкод-IP и CORS.
+        const API_URL = '/api/data';
+
+        // --- DOM-элементы ---
+        const form = document.getElementById('createForm');
+        const nameInput = document.getElementById('nameInput');
+        const valueInput = document.getElementById('valueInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const formStatus = document.getElementById('formStatus');
+        const itemsContainer = document.getElementById('itemsContainer');
+        const refreshBtn = document.getElementById('refreshBtn');
+
+        // --- Вспомогательные функции ---
+        function setStatus(message, type = '') {
+            formStatus.textContent = message;
+            formStatus.className = 'status ' + type;
+            setTimeout(() => {
+                if (!formStatus.className.includes('error')) {
+                    formStatus.textContent = '';
+                }
+            }, 5000);
         }
-        var div = document.createElement('div');
-        div.innerHTML = msg;
-        warningBanner.appendChild(div);
-        if (type == 'error') div.style = 'background: red; padding: 10px;';
-        else {
-          if (type == 'warning') div.style = 'background: yellow; padding: 10px;';
-          setTimeout(function() {
-            warningBanner.removeChild(div);
-            updateBannerVisibility();
-          }, 5000);
+
+        function formatDate(dateStr) {
+            try {
+                const d = new Date(dateStr);
+                return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+            } catch {
+                return dateStr;
+            }
         }
-        updateBannerVisibility();
-      }
 
-      var buildUrl = "Build";
-      var loaderUrl = buildUrl + "/Web.loader.js";
-      var config = {
-        dataUrl: buildUrl + "/Web.data.gz",
-        frameworkUrl: buildUrl + "/Web.framework.js.gz",
-        codeUrl: buildUrl + "/Web.wasm.gz",
-        streamingAssetsUrl: "StreamingAssets",
-        companyName: "DefaultCompany",
-        productName: "ReturnMyEyes",
-        productVersion: "0.1",
-        showBanner: unityShowBanner,
-      };
+        // --- Получение списка данных ---
+        async function fetchData() {
+            try {
+                const response = await fetch(API_URL);
+                if (!response.ok) throw new Error(`Ошибка HTTP: ${response.status}`);
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Ошибка загрузки данных:', error);
+                throw error;
+            }
+        }
 
-      // By default, Unity keeps WebGL canvas render target size matched with
-      // the DOM size of the canvas element (scaled by window.devicePixelRatio)
-      // Set this to false if you want to decouple this synchronization from
-      // happening inside the engine, and you would instead like to size up
-      // the canvas DOM size and WebGL render target sizes yourself.
-      // config.matchWebGLToCanvasSize = false;
+        // --- Отрисовка списка ---
+        function renderItems(items) {
+            if (!items || items.length === 0) {
+                itemsContainer.innerHTML = `<div class="empty-state">📭 Нет записей. Создайте первую!</div>`;
+                return;
+            }
 
-      if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-        // Mobile device style: fill the whole browser client area with the game canvas:
+            // Сортируем по id (новые сверху)
+            const sorted = [...items].sort((a, b) => b.id - a.id);
 
-        var meta = document.createElement('meta');
-        meta.name = 'viewport';
-        meta.content = 'width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes';
-        document.getElementsByTagName('head')[0].appendChild(meta);
-        container.className = "unity-mobile";
-        canvas.className = "unity-mobile";
+            let html = '';
+            sorted.forEach(item => {
+                const name = item.name || 'Без имени';
+                const value = item.value || '';
+                const date = item.creatingDate ? formatDate(item.creatingDate) : '—';
+                html += `
+                    <div class="item-row">
+                        <div class="item-info">
+                            <div class="item-name">${escapeHtml(name)}</div>
+                            <div class="item-value">${escapeHtml(value)}</div>
+                            <div class="item-date">🕒 ${escapeHtml(date)}</div>
+                        </div>
+                        <div class="item-id">#${item.id}</div>
+                    </div>
+                `;
+            });
+            itemsContainer.innerHTML = html;
+        }
 
-        // To lower canvas resolution on mobile devices to gain some
-        // performance, uncomment the following line:
-        // config.devicePixelRatio = 1;
+        // Простейший экранирование HTML (для безопасности)
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
 
+        // --- Обновление списка (с индикацией) ---
+        async function refreshList() {
+            try {
+                itemsContainer.innerHTML = `<div class="empty-state">⏳ Загрузка...</div>`;
+                const data = await fetchData();
+                renderItems(data);
+                setStatus('✅ Список обновлён', 'success');
+            } catch (error) {
+                itemsContainer.innerHTML = `<div class="empty-state">❌ Не удалось загрузить данные. Проверьте соединение.</div>`;
+                setStatus('❌ Ошибка загрузки: ' + error.message, 'error');
+            }
+        }
 
-      } else {
-        // Desktop style: Render the game canvas in a window that can be maximized to fullscreen:
+        // --- Отправка новой записи ---
+        async function submitData(name, value) {
+            try {
+                const payload = { name, value: value || null };
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`Сервер вернул ${response.status}: ${errText}`);
+                }
+                const newItem = await response.json();
+                setStatus(`✅ Создана запись #${newItem.id}`, 'success');
+                // Обновить список
+                await refreshList();
+                // Очистить форму
+                nameInput.value = '';
+                valueInput.value = '';
+                nameInput.focus();
+                return newItem;
+            } catch (error) {
+                console.error('Ошибка отправки:', error);
+                setStatus('❌ Ошибка: ' + error.message, 'error');
+                throw error;
+            }
+        }
 
-        canvas.style.width = "960px";
-        canvas.style.height = "600px";
-      }
+        // --- Обработчики событий ---
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = nameInput.value.trim();
+            if (!name) {
+                setStatus('⚠️ Поле "Имя" обязательно', 'error');
+                nameInput.focus();
+                return;
+            }
+            const value = valueInput.value.trim() || '';
+            // Блокируем кнопку
+            sendBtn.disabled = true;
+            sendBtn.textContent = '⏳ Отправка...';
+            try {
+                await submitData(name, value);
+            } catch (err) {
+                // ошибка уже обработана в submitData
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = '📨 Отправить';
+            }
+        });
 
-      loadingBar.style.display = "block";
+        refreshBtn.addEventListener('click', () => {
+            refreshBtn.style.transform = 'rotate(90deg)';
+            refreshList().finally(() => {
+                setTimeout(() => {
+                    refreshBtn.style.transform = '';
+                }, 300);
+            });
+        });
 
-      var script = document.createElement("script");
-      script.src = loaderUrl;
-      script.onload = () => {
-        createUnityInstance(canvas, config, (progress) => {
-          progressBarFull.style.width = 100 * progress + "%";
-              }).then((unityInstance) => {
-                loadingBar.style.display = "none";
-                fullscreenButton.onclick = () => {
-                  unityInstance.SetFullscreen(1);
-                };
-              }).catch((message) => {
-                alert(message);
-              });
-            };
-
-      document.body.appendChild(script);
-
-    </script>
-  </body>
+        // --- Инициализация --- 
+        refreshList();
+    })();
+</script>
+</body>
 </html>

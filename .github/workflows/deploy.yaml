@@ -175,6 +175,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./apps/client
+          pull: true
           push: ${{ github.event_name != 'pull_request' }}
           load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ env.CLIENT_IMAGE_NAME }}:${{ github.sha }}
@@ -186,6 +187,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./apps/server
+          pull: true
           push: ${{ github.event_name != 'pull_request' }}
           load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ env.SERVER_IMAGE_NAME }}:${{ github.sha }}
@@ -207,6 +209,7 @@ jobs:
         with:
           image-ref: ${{ env.CLIENT_IMAGE_NAME }}:${{ github.sha }}
           severity: 'CRITICAL,HIGH'
+          trivyignores: '.trivyignore.yaml'
           exit-code: '1'
           ignore-unfixed: true
 
@@ -216,6 +219,7 @@ jobs:
         with:
           image-ref: ${{ env.SERVER_IMAGE_NAME }}:${{ github.sha }}
           severity: 'CRITICAL,HIGH'
+          trivyignores: '.trivyignore.yaml'
           exit-code: '1'
           ignore-unfixed: true
 

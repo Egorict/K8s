@@ -1,0 +1,7 @@
+# В образ идут только html/ и nginx.conf (см. dockerfile). Всё остальное —
+# локальные инструменты, и гонять их в контекст сборки незачем: node_modules
+# с моделями tesseract весит десятки мегабайт.
+node_modules/
+tools/
+package.json
+package-lock.json

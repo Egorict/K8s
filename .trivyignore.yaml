@@ -1,0 +1,35 @@
+# Подавление находок Trivy. Каждая запись — осознанное решение с обоснованием
+# и СРОКОМ: после expired_at правило перестаёт действовать и находка всплывёт
+# снова. Так подавление не превращается в вечный «ковёр», под который заметено.
+
+vulnerabilities:
+  # Семь CVE в util-linux (пакет libuuid) из базового образа Alpine.
+  # Все требуют выполнения mount(8)/nsenter(1) с привилегиями, которых у наших
+  # контейнеров нет по построению:
+  #   * runAsNonRoot + runAsUser 101/1000/70 — процесс не root;
+  #   * capabilities.drop: ["ALL"] — нет CAP_SYS_ADMIN, вызвать mount() нельзя;
+  #   * allowPrivilegeEscalation: false — SUID-бинарь не повысит привилегии;
+  #   * readOnlyRootFilesystem: true — файловая система контейнера неизменяема.
+  # (см. securityContext в infrastructure/k8s/base/*/templates/deployment.yaml)
+  # Уберите эти записи, когда базовый образ подтянет util-linux >= 2.42.3-r0.
+  - id: CVE-2026-53612
+    statement: "util-linux mount TOCTOU; контейнер без CAP_SYS_ADMIN не может смонтировать ФС"
+    expired_at: 2026-11-30
+  - id: CVE-2026-53613
+    statement: "util-linux mount TOCTOU; контейнер без CAP_SYS_ADMIN не может смонтировать ФС"
+    expired_at: 2026-11-30
+  - id: CVE-2026-53614
+    statement: "SUID mount(8) обход nosuid; allowPrivilegeEscalation: false исключает сценарий"
+    expired_at: 2026-11-30
+  - id: CVE-2026-76642
+    statement: "привилегированные post-hooks mount; mount в контейнере недоступен"
+    expired_at: 2026-11-30
+  - id: CVE-2026-78408
+    statement: "nsenter --join-cgroup; требует привилегий, которых нет у пода"
+    expired_at: 2026-11-30
+  - id: CVE-2026-78409
+    statement: "X-mount.subdir через симлинки; mount в контейнере недоступен"
+    expired_at: 2026-11-30
+  - id: CVE-2026-78410
+    statement: "bind mount не закрепляет источник; mount в контейнере недоступен"
+    expired_at: 2026-11-30
