@@ -19,7 +19,7 @@ spec:
       automountServiceAccountToken: false
       # uid/gid 70 — пользователь postgres именно в ALPINE-варианте образа
       # (в Debian-варианте он 999 — не перепутать при смене базового образа).
-      # fsGroup о бязателен: без него kubelet не сменит владельца тома Longhorn,
+      # fsGroup о бязателен: без него kubel et не сменит владельца тома Longhorn,
       # и непривилегированный процесс не сможет писать в PGDATA.  
       securityContext:
         runAsNonRoot: true
