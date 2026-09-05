@@ -1,0 +1,22 @@
+{{- if .Values.archive.enabled }}
+# Том для архива скриншотов. Вынесен из образа: 800 картинок весили ~158 МБ,
+# и каждая правка клиента заставляла CI пересобирать и перекачивать их заново,
+# а ноду — снова скачивать. Теперь содержимое архива живёт отдельно от образа,
+# и добавление скриншотов вообще не требует сборки.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.archive.claimName }}
+  namespace: {{ .Release.Namespace }}
+  # Том переживает удаление релиза: без этой аннотации helm/ArgoCD снесли бы
+  # PVC вместе с чартом и данные пропали бы.
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.archive.size }}
+  storageClassName: {{ .Values.archive.storageClass }}
+{{- end }}

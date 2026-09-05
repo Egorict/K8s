@@ -5,3 +5,10 @@ node_modules/
 tools/
 package.json
 package-lock.json
+
+# Содержимое архива в образ НЕ попадает: оно живёт на томе Longhorn и
+# заливается скриптом tools/sync-archive.sh. Иначе 800 скриншотов (~158 МБ)
+# пересобирались и перекачивались бы при каждой правке клиента.
+# Сама страница html/as.html остаётся в образе — исключён только контент.
+html/as/screens/
+html/as/data.json

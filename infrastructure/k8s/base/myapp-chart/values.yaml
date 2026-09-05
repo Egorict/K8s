@@ -16,6 +16,19 @@ service:
   # Единственный источник правды — на него ссылаются Deployment,
   # Service, пробы и NetworkPolicy.
   nodePort: 30081 # порт, по которому будет доступно приложение
+
+# Архив скриншотов на отдельном томе, а не внутри образа.
+# 800 картинок весили ~158 МБ: каждая правка клиента заставляла CI пересобирать
+# и перекачивать их, а ноду — скачивать заново. Теперь содержимое архива живёт
+# на томе, и его пополнение вообще не требует сборки образа.
+# Наполняется скриптом apps/client/tools/sync-archive.sh
+archive:
+  enabled: true
+  claimName: archive-pvc
+  size: 5Gi
+  storageClass: longhorn
+  # Ровно тот путь, где архив лежал в образе — поэтому nginx.conf не менялся.
+  mountPath: /usr/share/nginx/html/as
 # Ingress отключён – используем NodePort
 ingress:
   enabled: false

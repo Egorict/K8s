@@ -6,6 +6,13 @@ metadata:
     app: myapp
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if .Values.archive.enabled }}
+  # Том архива — ReadWriteOnce: примонтировать его к двум подам нельзя.
+  # При RollingUpdate новый под ждал бы том, который держит старый, и
+  # выкладка вставала бы намертво. Recreate гасит старый под первым.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       app: myapp
@@ -62,6 +69,17 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        {{- if .Values.archive.enabled }}
+        # Монтируем ровно в тот путь, где архив лежал внутри образа, —
+        # поэтому nginx.conf править не пришлось.
+        - name: archive
+          mountPath: {{ .Values.archive.mountPath }}
+        {{- end }}
       volumes:
       - name: tmp
         emptyDir: {}
+      {{- if .Values.archive.enabled }}
+      - name: archive
+        persistentVolumeClaim:
+          claimName: {{ .Values.archive.claimName }}
+      {{- end }}
