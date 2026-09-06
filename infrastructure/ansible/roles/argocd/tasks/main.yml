@@ -40,6 +40,20 @@
     - argocd_release.status.status != 'deployed'
 
 - name: Install ArgoCD
+  vars:
+    argocd_values:
+      server:
+        service:
+          type: NodePort
+          # | int обязателен: nodePort в спеке Service — целое число, строка
+          # "30080" отрендерилась бы в невалидный манифест.
+          nodePortHttp: "{{ argocd_nodeport_http | int }}"
+          nodePortHttps: "{{ argocd_nodeport_https | int }}"
+      configs:
+        cm:
+          # Интервал самостоятельного опроса git. Дефолт 180s — та самая
+          # пауза в пару минут между пушем и появлением изменений.
+          timeout.reconciliation: "{{ argocd_reconciliation_timeout }}"
   kubernetes.core.helm:
     name: argocd
     chart_ref: argo/argo-cd
@@ -52,14 +66,12 @@
     update_repo_cache: true
     release_namespace: "{{ argocd_namespace }}"
     create_namespace: true
-    values:
-      server:
-        service:
-          type: NodePort
-          # | int обязателен: nodePort в спеке Service — целое число, строка
-          # "30080" отрендерилась бы в невалидный манифест.
-          nodePortHttp: "{{ argocd_nodeport_http | int }}"
-          nodePortHttps: "{{ argocd_nodeport_https | int }}"
+    # Секрет вебхука подмешиваем только если он задан — с ним ArgoCD синкает
+    # мгновенно по пушу, без ожидания следующего цикла опроса.
+    values: >-
+      {{ argocd_values | combine({"configs": {"secret":
+         {"githubSecret": argocd_github_webhook_secret}}}, recursive=True)
+         if argocd_github_webhook_secret else argocd_values }}
     wait: true
     wait_timeout: 15m0s
     atomic: true
