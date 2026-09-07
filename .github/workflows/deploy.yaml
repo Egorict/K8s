@@ -125,9 +125,15 @@ jobs:
             helm template test "$chart" > /dev/null
           done
 
+      # PyYAML ставим явно, а не полагаемся на предустановленный в образе раннера.
+      # Шаг setup-python выше (он появляется, когда менялся бот) подменяет
+      # python3 на чистый интерпретатор, где PyYAML нет, и проверка падала с
+      # ModuleNotFoundError. Теперь шаг не зависит от того, какой python впереди
+      # в PATH и что GitHub положит в раннер завтра.
       - name: Validate ArgoCD manifests
         if: needs.changes.outputs.charts == 'true'
         run: |
+          python3 -m pip install --quiet pyyaml
           for f in infrastructure/k8s/argocd/*.yaml; do
             python3 -c "import yaml,sys; list(yaml.safe_load_all(open(sys.argv[1])))" "$f"
           done
