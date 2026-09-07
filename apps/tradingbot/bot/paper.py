@@ -11,7 +11,7 @@ import time
 from typing import Dict, List, Optional
 
 from .config import Config
-from .models import ClosedTrade, OrderbookView, PendingOrder, Position, Setup
+from .models import ClosedTrade, OrderbookView, PendingOrder, PlainSetup, Position, Setup
 
 log = logging.getLogger("paper")
 
@@ -154,6 +154,69 @@ class PaperBroker:
             "ЛОНГ" if setup.side == "long" else "ШОРТ", position.symbol, price, qty,
             stop_price, take_price, setup.wall.describe(), order.age_sec(),
         )
+        return position
+
+    def open_market(self, setup: "PlainSetup", stop_usd: float, take_usd: float,
+                    stop_price_limit: Optional[float] = None) -> Position:
+        """Рыночный вход для ТС пробоя и биткоина.
+
+        Уровни считаются от целей в деньгах с уже заложенной комиссией круга,
+        поэтому стоп и тейк дают ровно заявленные суммы чистыми.
+
+        stop_price_limit - технический стоп самой ТС (возврат под уровень).
+        Берётся тот из двух, который сработает раньше: смысл денежного стопа
+        в том, чтобы ограничить убыток, а не в том, чтобы пересиживать
+        сломанную идею сделки.
+        """
+        risk = self.cfg.risk
+        price = setup.price
+        notional = risk.notional_usd
+        qty = notional / price
+
+        round_trip_fee = notional * risk.taker_fee * 2
+        take_move = (take_usd + round_trip_fee) / qty
+        stop_move = (stop_usd - round_trip_fee) / qty
+
+        if setup.side == "long":
+            stop_price = price - stop_move
+            take_price = price + take_move
+            if stop_price_limit is not None:
+                stop_price = max(stop_price, stop_price_limit)
+        else:
+            stop_price = price + stop_move
+            take_price = price - take_move
+            if stop_price_limit is not None:
+                stop_price = min(stop_price, stop_price_limit)
+
+        position = Position(
+            trade_id=Position.new_id(),
+            symbol=setup.symbol,
+            side=setup.side,
+            timeframe=setup.timeframe,
+            qty=qty,
+            entry_price=price,
+            stop_price=stop_price,
+            take_price=take_price,
+            opened_at=time.time(),
+            margin_usd=risk.margin_usd,
+            leverage=risk.leverage,
+            notional_usd=notional,
+            entry_score=setup.score,
+            entry_reason=" | ".join(setup.notes),
+            setup_snapshot=dict(setup.extra, book=setup.book),
+            entry_fee_rate=risk.taker_fee,
+            exit_fee_rate=risk.taker_fee,
+            last_price=price,
+            best_price=price,
+        )
+        self.positions[setup.symbol] = position
+        log.info(
+            "[ДЕМО] %s %s @ %.8g | qty %.6g | стоп %.8g | тейк %.8g | скор %.2f",
+            "ЛОНГ" if setup.side == "long" else "ШОРТ", position.symbol, price, qty,
+            stop_price, take_price, setup.score,
+        )
+        for note in setup.notes:
+            log.info("    %s", note)
         return position
 
     # ------------------------------------------------------------------ учёт

@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from .models import ClosedTrade, Position, Setup, WallSetup
+from .models import ClosedTrade, PlainSetup, Position, Setup, WallSetup
 
 log = logging.getLogger("journal")
 
@@ -149,6 +149,28 @@ class Journal:
             "impulses": "",
             "stall": "",
             "book": setup.wall.describe(),
+            "notes": " | ".join(setup.notes),
+        }
+        self._append(self.signals_csv, SIGNAL_COLUMNS, row)
+
+    def log_plain_signal(self, setup: "PlainSetup", action: str) -> None:
+        """Сигнал ТС пробоя и биткоина - в тот же signals.csv.
+
+        Колонки общие на все ТС: импульсные остаются пустыми, а существенное
+        (уровень, касания, глубина просадки, опора) уже собрано в notes.
+        """
+        row = {
+            "time": _ts(time.time()),
+            "symbol": setup.symbol,
+            "price": f"{setup.price:.10g}",
+            "timeframe": f"{setup.timeframe}m" if setup.timeframe.isdigit() else setup.timeframe,
+            "score": round(setup.score, 3),
+            "action": action,
+            "change_24h_pct": round(setup.ticker.change_24h * 100, 2),
+            "turnover_24h_usd": round(setup.ticker.turnover_24h, 0),
+            "impulses": "",
+            "stall": "",
+            "book": setup.book,
             "notes": " | ".join(setup.notes),
         }
         self._append(self.signals_csv, SIGNAL_COLUMNS, row)

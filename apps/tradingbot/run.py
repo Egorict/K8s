@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import csv
 import logging
+import logging.handlers
 import os
 import signal
 import sys
@@ -32,7 +33,12 @@ def setup_logging(cfg: Config, debug: bool = False) -> None:
 
     stream = logging.StreamHandler(sys.stdout)
     stream.setFormatter(fmt)
-    file_handler = logging.FileHandler(cfg.log_file, encoding="utf-8")
+    # Ротация, а не обычный FileHandler: бот пишет лог непрерывно, и на томе
+    # в 1-2 Gi он рано или поздно съел бы всё место вместе с журналом сделок.
+    # 4 файла по 5 МБ - потолок 20 МБ, а панели хватает и последних строк.
+    file_handler = logging.handlers.RotatingFileHandler(
+        cfg.log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
     file_handler.setFormatter(fmt)
 
     root = logging.getLogger()
@@ -93,6 +99,12 @@ def _make_engine(cfg: Config, client: BybitPublic):
     if cfg.strategy == "density":
         from bot.density import DensityEngine
         return DensityEngine(cfg, client)
+    if cfg.strategy == "breakout":
+        from bot.breakout import BreakoutEngine
+        return BreakoutEngine(cfg, client)
+    if cfg.strategy == "btc":
+        from bot.btc import BtcEngine
+        return BtcEngine(cfg, client)
     return Engine(cfg, client)
 
 
@@ -164,9 +176,10 @@ def main() -> None:
     parser.add_argument("--web", action="store_true", help="поднять веб-панель с журналом торговли")
     parser.add_argument("--port", type=int, help="порт веб-панели (по умолчанию 8080)")
     parser.add_argument("--data-dir", help="каталог для журналов (по умолчанию data)")
-    parser.add_argument("--strategy", choices=["impulse", "density"],
-                        help="какую ТС запускать: impulse (шорт истощения импульса) "
-                             "или density (торговля от плотностей в стакане)")
+    parser.add_argument("--strategy", choices=["impulse", "density", "breakout", "btc"],
+                        help="какую ТС запускать: impulse (шорт истощения импульса), "
+                             "density (плотности в стакане), breakout (пробой уровня), "
+                             "btc (откуп просадки биткоина)")
     parser.add_argument("--debug", action="store_true", help="подробные логи")
     args = parser.parse_args()
 

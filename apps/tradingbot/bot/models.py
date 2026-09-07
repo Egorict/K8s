@@ -165,6 +165,25 @@ class WallSetup:
 
 
 @dataclass
+class PlainSetup:
+    """Сетап ТС, которой не нужны ни разбор импульса, ни объект стены.
+
+    Используют ТС пробоя и биткоина: у них вход рыночный, а всё существенное
+    (уровень, глубина просадки, опора) читается человеком из notes и попадает
+    в журнал как есть.
+    """
+    symbol: str
+    side: str              # 'long' | 'short'
+    price: float
+    timeframe: str
+    score: float
+    ticker: Ticker
+    notes: List[str] = field(default_factory=list)
+    book: str = ""         # краткое состояние стакана, для signals.csv
+    extra: Dict = field(default_factory=dict)
+
+
+@dataclass
 class PendingOrder:
     """Выставленная, но ещё не исполненная лимитка (ТС плотностей)."""
     symbol: str

@@ -14,6 +14,12 @@ image:
 # статистика по каждой ТС остаётся чистой и их можно честно сравнивать.
 # Образ у всех один и тот же, различие — ключ --strategy.
 #
+# storage: 2Gi с большим запасом. trades.csv растёт медленно, а лог ограничен
+# 20 МБ (RotatingFileHandler, 4 файла по 5).
+# ВАЖНО: уменьшить уже созданный PVC нельзя — Kubernetes запрещает shrink,
+# и ArgoCD упрётся в ошибку синка. Менять размер только вместе с удалением PVC
+# (у них resource-policy: keep, сам ArgoCD их не тронет).
+#
 # Добавить третью ТС = дописать сюда элемент (и роут в apps/client/nginx.conf,
 # и вкладку в apps/client/html/tb.html).
 bots:
@@ -26,6 +32,14 @@ bots:
   - name: density
     strategy: density
     args: ["run", "--web", "--strategy", "density"]
+    storage: 2Gi
+  - name: breakout
+    strategy: breakout
+    args: ["run", "--web", "--strategy", "breakout"]
+    storage: 2Gi
+  - name: btc
+    strategy: btc
+    args: ["run", "--web", "--strategy", "btc"]
     storage: 2Gi
 
 service:
