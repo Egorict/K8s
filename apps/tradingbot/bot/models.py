@@ -81,6 +81,8 @@ class Wall:
 class OrderbookView:
     """Свёртка стакана для стратегии."""
     mid: float = 0.0
+    best_bid: float = 0.0                  # лучшие цены нужны ТС плотностей:
+    best_ask: float = 0.0                  # по ним решается, исполнилась ли лимитка
     imbalance: float = 1.0                 # sum(bid notional) / sum(ask notional) в зоне
     walls: List[Wall] = field(default_factory=list)
     genuine_ask_wall: Optional[Wall] = None
@@ -142,8 +144,43 @@ class Setup:
 
 
 @dataclass
+class WallSetup:
+    """Сетап ТС плотностей: найденная опора и лимитка перед ней."""
+    symbol: str
+    side: str              # сторона НАШЕЙ сделки: 'long' у bid-стены, 'short' у ask-стены
+    wall: Wall
+    entry_price: float     # цена лимитки - перед плотностью, а не в ней
+    mid: float
+    dominance: float       # во сколько раз плотность крупнее встречной стороны
+    ticker: Ticker
+    notes: List[str] = field(default_factory=list)
+
+    @property
+    def score(self) -> float:
+        """Насколько сетап хорош: живучесть стены + её доминирование + близость."""
+        persist = min(1.0, self.wall.persisted / 20.0)
+        dominance = min(1.0, self.dominance / 5.0)
+        proximity = 1.0 - min(1.0, abs(self.wall.distance_pct) / 0.005)
+        return round(0.4 * persist + 0.4 * dominance + 0.2 * proximity, 3)
+
+
+@dataclass
+class PendingOrder:
+    """Выставленная, но ещё не исполненная лимитка (ТС плотностей)."""
+    symbol: str
+    side: str
+    price: float
+    qty: float
+    placed_at: float
+    setup: WallSetup
+
+    def age_sec(self) -> float:
+        return time.time() - self.placed_at
+
+
+@dataclass
 class Position:
-    """Демо-позиция (шорт)."""
+    """Демо-позиция. side: 'short' (ТС импульса) или 'long'/'short' (ТС плотностей)."""
     trade_id: str
     symbol: str
     side: str
@@ -160,6 +197,13 @@ class Position:
     entry_reason: str
     setup_snapshot: Dict = field(default_factory=dict)
 
+    # Комиссии в долях, по сторонам сделки. У ТС импульса вход рыночный
+    # (тейкер), у ТС плотностей - лимиткой (мейкер, дешевле), а выход в обеих
+    # по рынку. Хранятся в позиции, чтобы расчёт PnL не зависел от того,
+    # какая ТС её открыла.
+    entry_fee_rate: float = 0.00055
+    exit_fee_rate: float = 0.00055
+
     # Рантайм.
     last_price: float = 0.0
     best_price: float = 0.0            # лучшая (минимальная для шорта) цена
@@ -167,13 +211,23 @@ class Position:
     worst_pnl_usd: float = 0.0
     reacted: bool = False              # было ли ожидаемое движение вниз
     breakeven_armed: bool = False
+    # Плотность, из-за которой открылась сделка (ТС плотностей).
+    wall_side: str = ""
+    wall_price: float = 0.0
+    wall_notional: float = 0.0
 
     @staticmethod
     def new_id() -> str:
         return uuid.uuid4().hex[:12]
 
+    @property
+    def is_long(self) -> bool:
+        return self.side == "long"
+
     def gross_pnl(self, price: float) -> float:
-        """PnL шорта без комиссий, USD."""
+        """PnL без комиссий, USD. Знак зависит от стороны сделки."""
+        if self.is_long:
+            return (price - self.entry_price) * self.qty
         return (self.entry_price - price) * self.qty
 
     def fees(self, price: float) -> float:

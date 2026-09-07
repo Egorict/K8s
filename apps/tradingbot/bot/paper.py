@@ -11,7 +11,7 @@ import time
 from typing import Dict, List, Optional
 
 from .config import Config
-from .models import ClosedTrade, OrderbookView, Position, Setup
+from .models import ClosedTrade, OrderbookView, PendingOrder, Position, Setup
 
 log = logging.getLogger("paper")
 
@@ -77,6 +77,8 @@ class PaperBroker:
             },
             last_price=price,
             best_price=price,
+            entry_fee_rate=risk.taker_fee,
+            exit_fee_rate=risk.taker_fee,
         )
         self.positions[setup.symbol] = position
         log.info(
@@ -88,11 +90,90 @@ class PaperBroker:
             log.info("    %s", note)
         return position
 
+    def open_from_limit(self, order: "PendingOrder") -> Position:
+        """Исполнение лимитки ТС плотностей: вход строго по её цене.
+
+        Проскальзывания на входе нет по построению - лимитка либо исполняется
+        по своей цене, либо не исполняется вовсе. Комиссия входа мейкерская.
+        """
+        risk = self.cfg.risk
+        dcfg = self.cfg.density
+        setup = order.setup
+        price = order.price
+        qty = order.qty
+        notional = qty * price
+
+        # Уровни считаем от целей в деньгах, с уже учтённой комиссией круга
+        # (мейкер на входе + тейкер на выходе), чтобы +5$ были чистыми.
+        round_trip_fee = notional * (dcfg.maker_fee + risk.taker_fee)
+        take_move = (dcfg.take_profit_usd + round_trip_fee) / qty
+        money_stop_move = (dcfg.stop_loss_usd - round_trip_fee) / qty
+        # Второй стоп - за самой плотностью: если её прошли насквозь, идея сделки
+        # умерла раньше, чем набежал денежный убыток. Берём тот, что ближе.
+        wall_stop_move = abs(price - setup.wall.price) + price * dcfg.stop_beyond_wall_pct
+        stop_move = min(money_stop_move, wall_stop_move)
+
+        if setup.side == "long":
+            stop_price, take_price = price - stop_move, price + take_move
+        else:
+            stop_price, take_price = price + stop_move, price - take_move
+
+        position = Position(
+            trade_id=Position.new_id(),
+            symbol=setup.symbol,
+            side=setup.side,
+            timeframe="book",          # сделка от стакана, таймфрейма у неё нет
+            qty=qty,
+            entry_price=price,
+            stop_price=stop_price,
+            take_price=take_price,
+            opened_at=time.time(),
+            margin_usd=risk.margin_usd,
+            leverage=risk.leverage,
+            notional_usd=notional,
+            entry_score=setup.score,
+            entry_reason=" | ".join(setup.notes),
+            setup_snapshot={
+                "wall": setup.wall.describe(),
+                "dominance": round(setup.dominance, 2),
+                "turnover_24h": setup.ticker.turnover_24h,
+                "waited_sec": round(order.age_sec(), 1),
+            },
+            entry_fee_rate=dcfg.maker_fee,
+            exit_fee_rate=risk.taker_fee,
+            last_price=price,
+            best_price=price,
+            wall_side=setup.wall.side,
+            wall_price=setup.wall.price,
+            wall_notional=setup.wall.notional,
+        )
+        self.positions[setup.symbol] = position
+        log.info(
+            "[ДЕМО] %s %s @ %.8g по лимитке | qty %.6g | стоп %.8g | тейк %.8g | "
+            "плотность %s | ждали %.0fс",
+            "ЛОНГ" if setup.side == "long" else "ШОРТ", position.symbol, price, qty,
+            stop_price, take_price, setup.wall.describe(), order.age_sec(),
+        )
+        return position
+
     # ------------------------------------------------------------------ учёт
 
     def _fees(self, position: Position, exit_price: float) -> float:
-        rate = self.cfg.risk.taker_fee
-        return position.qty * (position.entry_price + exit_price) * rate
+        # Ставки хранятся в самой позиции: у ТС импульса вход по рынку (тейкер),
+        # у ТС плотностей - лимиткой (мейкер). Выход в обеих по рынку.
+        return position.qty * (position.entry_price * position.entry_fee_rate
+                               + exit_price * position.exit_fee_rate)
+
+    def track(self, position: Position, price: float) -> float:
+        """Обновляет рантайм-метрики позиции и возвращает текущий PnL."""
+        position.last_price = price
+        pnl = self.net_pnl(position, price)
+        better = price > position.best_price if position.is_long else price < position.best_price
+        if better or position.best_price <= 0:
+            position.best_price = price
+        position.best_pnl_usd = max(position.best_pnl_usd, pnl)
+        position.worst_pnl_usd = min(position.worst_pnl_usd, pnl)
+        return pnl
 
     def net_pnl(self, position: Position, price: float) -> float:
         return position.gross_pnl(price) - self._fees(position, price)

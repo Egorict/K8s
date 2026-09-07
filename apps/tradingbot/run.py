@@ -71,6 +71,8 @@ def apply_args(cfg: Config, args: argparse.Namespace) -> None:
         cfg.web_enabled = True
     if args.data_dir:
         cfg.data_dir = args.data_dir
+    if args.strategy:
+        cfg.strategy = args.strategy
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
@@ -86,6 +88,14 @@ def _install_signal_handlers(stop: asyncio.Event) -> None:
             pass  # Windows: обойдёмся KeyboardInterrupt
 
 
+def _make_engine(cfg: Config, client: BybitPublic):
+    """Одна ТС на процесс: у каждой свой журнал, и статистика не смешивается."""
+    if cfg.strategy == "density":
+        from bot.density import DensityEngine
+        return DensityEngine(cfg, client)
+    return Engine(cfg, client)
+
+
 async def run_bot(cfg: Config) -> None:
     log = logging.getLogger("main")
     stop = asyncio.Event()
@@ -97,7 +107,7 @@ async def run_bot(cfg: Config) -> None:
         runner = await start_web(cfg)
 
     async with BybitPublic(category=cfg.category) as client:
-        engine = Engine(cfg, client)
+        engine = _make_engine(cfg, client)
         task = asyncio.create_task(engine.run(), name="engine")
         stopper = asyncio.create_task(stop.wait(), name="stop")
         try:
@@ -154,6 +164,9 @@ def main() -> None:
     parser.add_argument("--web", action="store_true", help="поднять веб-панель с журналом торговли")
     parser.add_argument("--port", type=int, help="порт веб-панели (по умолчанию 8080)")
     parser.add_argument("--data-dir", help="каталог для журналов (по умолчанию data)")
+    parser.add_argument("--strategy", choices=["impulse", "density"],
+                        help="какую ТС запускать: impulse (шорт истощения импульса) "
+                             "или density (торговля от плотностей в стакане)")
     parser.add_argument("--debug", action="store_true", help="подробные логи")
     args = parser.parse_args()
 

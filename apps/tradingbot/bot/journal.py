@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from .models import ClosedTrade, Position, Setup
+from .models import ClosedTrade, Position, Setup, WallSetup
 
 log = logging.getLogger("journal")
 
@@ -84,7 +84,8 @@ class Journal:
             "date": _date(trade.opened_at),
             "symbol": trade.symbol,
             "side": trade.side,
-            "timeframe": f"{trade.timeframe}m",
+            # У ТС плотностей таймфрейма нет, там стоит "book" - "bookm" писать незачем.
+            "timeframe": f"{trade.timeframe}m" if trade.timeframe.isdigit() else trade.timeframe,
             "open_time": _ts(trade.opened_at),
             "close_time": _ts(trade.closed_at),
             "duration_min": round(trade.duration_sec / 60, 2),
@@ -129,16 +130,47 @@ class Journal:
         }
         self._append(self.signals_csv, SIGNAL_COLUMNS, row)
 
-    def save_state(self, positions: List[Position], stats: Dict, watchlist: List[str]) -> None:
+    def log_wall_signal(self, setup: "WallSetup", action: str) -> None:
+        """Сигнал ТС плотностей - в тот же signals.csv, что и сетапы ТС импульса.
+
+        Колонки общие: у сделки от стакана нет импульса и затупа, зато есть
+        сама плотность, поэтому она пишется в колонку book, а импульсные
+        колонки остаются пустыми.
+        """
+        row = {
+            "time": _ts(time.time()),
+            "symbol": setup.symbol,
+            "price": f"{setup.entry_price:.10g}",
+            "timeframe": "book",
+            "score": setup.score,
+            "action": action,
+            "change_24h_pct": round(setup.ticker.change_24h * 100, 2),
+            "turnover_24h_usd": round(setup.ticker.turnover_24h, 0),
+            "impulses": "",
+            "stall": "",
+            "book": setup.wall.describe(),
+            "notes": " | ".join(setup.notes),
+        }
+        self._append(self.signals_csv, SIGNAL_COLUMNS, row)
+
+    def save_state(self, positions: List[Position], stats: Dict, watchlist: List[str],
+                   strategy: str = "impulse", pending: Optional[List[Dict]] = None) -> None:
         payload = {
             "updated": _ts(time.time()),
+            # Панель показывает несколько ботов рядом, и каждый должен
+            # представляться сам - иначе по одному state.json не понять, чей он.
+            "strategy": strategy,
             "stats": stats,
             "watchlist": watchlist,
+            # Выставленные, но ещё не исполненные лимитки (ТС плотностей).
+            "pending_orders": pending or [],
             "open_positions": [
                 {
                     "trade_id": p.trade_id,
                     "symbol": p.symbol,
-                    "timeframe": f"{p.timeframe}m",
+                    "side": p.side,
+                    # У сделок от стакана таймфрейма нет - там стоит "book".
+                    "timeframe": f"{p.timeframe}m" if p.timeframe.isdigit() else p.timeframe,
                     "opened": _ts(p.opened_at),
                     "entry_price": p.entry_price,
                     "last_price": p.last_price,
@@ -146,6 +178,8 @@ class Journal:
                     "take_price": p.take_price,
                     "best_pnl_usd": round(p.best_pnl_usd, 2),
                     "age_min": round(p.age_sec() / 60, 1),
+                    "wall_price": p.wall_price,
+                    "wall_notional": round(p.wall_notional),
                 }
                 for p in positions
             ],

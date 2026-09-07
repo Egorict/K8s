@@ -3,14 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Трейдинг-бот · панель</title>
+<title>Трейдинг-боты · панель</title>
 <!--
   Страница отдаётся nginx клиента по адресу /tb (см. apps/client/nginx.conf).
-  Данные забираются с /tb/api/... — nginx проксирует их в под tradingbot,
-  срезая префикс: /tb/api/state -> под: /api/state.
+  Ботов несколько — по одному на торговую систему, у каждого свой под и свой
+  журнал. Данные забираются с /tb/api/<бот>/..., nginx проксирует их в нужный
+  под, срезая префикс: /tb/api/density/state -> под density: /api/state.
 
-  Своей страницы у бота наружу нет: она ходит в абсолютный /api/state,
-  а этот префикс на клиенте занят server-app.
+  Своей страницы у ботов наружу нет: она ходит за данными в абсолютный
+  /api/state, а этот префикс на клиенте занят server-app.
+
+  Добавить третью ТС: элемент в BOTS ниже, роут в nginx.conf, элемент в
+  bots[] в infrastructure/k8s/base/tradingbot-chart/values.yaml.
 -->
 <style>
   :root {
@@ -51,6 +55,22 @@
     background: rgba(229, 85, 90, .12); border: 1px solid rgba(229, 85, 90, .4); color: #f0a5a8;
   }
   .banner.show { display: block; }
+
+  /* Переключатель ботов. Он же сравнение: итог каждой ТС виден сразу,
+     без переключения вкладок. */
+  .bots { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+          margin-bottom: 22px; }
+  .bot {
+    text-align: left; padding: 13px 16px; border-radius: 10px; background: var(--card);
+    border: 1px solid var(--line); cursor: pointer; display: block; width: 100%;
+  }
+  .bot:hover { border-color: var(--dim2); }
+  .bot.active { border-color: var(--accent); background: var(--card2); }
+  .bot .title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .bot .desc { color: var(--dim2); font-size: 11.5px; margin-top: 2px; }
+  .bot .row { margin-top: 9px; display: flex; gap: 16px; align-items: baseline; }
+  .bot .big { font-size: 20px; font-weight: 600; }
+  .bot .small { color: var(--dim); font-size: 12px; }
 
   .cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); margin-bottom: 22px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
@@ -100,6 +120,9 @@
   .rail { position: relative; width: 150px; height: 6px; border-radius: 3px;
           background: linear-gradient(90deg, var(--red), var(--dim2) 50%, var(--green)); }
   .rail i { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--fg); border-radius: 1px; }
+  /* Сколько плотности уже съели: чем полнее полоса, тем ближе выход. */
+  .bar { position: relative; width: 120px; height: 6px; border-radius: 3px; background: var(--line); }
+  .bar i { position: absolute; left: 0; top: 0; height: 6px; border-radius: 3px; background: var(--warn); }
 
   pre { margin: 0; padding: 12px 14px; overflow: auto; font-size: 12px; line-height: 1.55;
         color: var(--dim); max-height: 340px; font-family: ui-monospace, Consolas, monospace; }
@@ -109,19 +132,22 @@
   details > summary { cursor: pointer; list-style: none; }
   details > summary::-webkit-details-marker { display: none; }
   .chev { color: var(--dim2); font-size: 11px; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Трейдинг-бот</h1>
+  <h1>Трейдинг-боты</h1>
   <span class="sub" id="status"><span class="dot down"></span>подключение…</span>
   <span class="spacer"></span>
   <button id="pause" title="Пауза автообновления">⏸ пауза</button>
-  <a class="sub" href="/tb/trades.csv">скачать trades.csv</a>
+  <a class="sub" id="csv" href="/tb/impulse/trades.csv">скачать trades.csv</a>
 </header>
 
 <main>
   <div class="banner" id="banner"></div>
+
+  <div class="bots" id="bots"></div>
 
   <div class="cards" id="cards"></div>
 
@@ -132,6 +158,11 @@
       <div class="chart" id="curve"></div>
       <div class="legend">Накопленный итог по закрытым сделкам, доллары. Каждая точка — одна сделка.</div>
     </div>
+  </section>
+
+  <section id="pendingSection" class="hidden">
+    <div class="head"><h2>Лимитки в стакане</h2><span class="count" id="pendingCount"></span></div>
+    <div class="panel scroll" id="pending"></div>
   </section>
 
   <section>
@@ -176,8 +207,38 @@
 <script>
 "use strict";
 
-const API = "/tb/api";
+// Боты. Порядок здесь = порядок вкладок на странице.
+const BOTS = [
+  {
+    id: "impulse",
+    name: "Импульс истощения",
+    desc: "шорт на альткоине, у которого выдохся резкий рост",
+  },
+  {
+    id: "density",
+    name: "Плотности в стакане",
+    desc: "лимитка перед крупной заявкой, выход когда её съели",
+  },
+];
+
 const REFRESH_MS = 5000;
+const STORE_KEY = "tb.bot";
+
+// Активная вкладка переживает перезагрузку страницы: смотреть за одним ботом
+// обычно приходится подряд, и каждый раз выбирать его заново — раздражает.
+// Приоритет у адреса (/tb#density), чтобы на конкретного бота можно было
+// дать ссылку; иначе берём последний выбор этого браузера.
+const known = id => BOTS.some(b => b.id === id);
+let active = BOTS[0].id;
+try {
+  const saved = localStorage.getItem(STORE_KEY);
+  if (saved && known(saved)) active = saved;
+} catch (e) { /* приватный режим — переживём */ }
+const fromHash = location.hash.replace("#", "");
+if (known(fromHash)) active = fromHash;
+
+// botId -> { state, trades, ok, error }
+const data = Object.create(null);
 
 // ---- утилиты ---------------------------------------------------------------
 
@@ -189,17 +250,18 @@ const price = v => { const x = Number(v); if (!Number.isFinite(x)) return esc(v)
   return x >= 100 ? x.toFixed(2) : x >= 1 ? x.toFixed(4) : x.toPrecision(4); };
 const money = (v, d = 2) => (n(v) >= 0 ? "+" : "−") + Math.abs(n(v)).toFixed(d);
 const cls = v => (n(v) >= 0 ? "pos" : "neg");
-const money_cell = (v, suffix = "") => `<td class="num ${cls(v)}">${money(v)}${suffix}</td>`;
+const usd = v => n(v).toLocaleString("ru-RU", { maximumFractionDigits: 0 }) + "$";
+const bot = id => BOTS.find(b => b.id === id);
 
-async function get(path, fallback) {
-  const r = await fetch(API + path, { cache: "no-store" });
+async function get(botId, path) {
+  const r = await fetch(`/tb/api/${botId}${path}`, { cache: "no-store" });
   if (!r.ok) throw new Error(path + " -> " + r.status);
   return r.json();
 }
 
 function table(cols, rows, render) {
   if (!rows.length) return '<div class="empty">пока пусто</div>';
-  const head = cols.map((c, i) => {
+  const head = cols.map(c => {
     const label = typeof c === "string" ? c : c.label;
     const numeric = typeof c === "object" && c.num;
     const key = typeof c === "object" ? c.key : null;
@@ -209,29 +271,88 @@ function table(cols, rows, render) {
   return `<table><thead><tr>${head}</tr></thead><tbody>${rows.map(render).join("")}</tbody></table>`;
 }
 
-// ---- карточки статистики ---------------------------------------------------
-
-function renderCards(state, trades) {
-  // Считаем по самому журналу сделок, а не по stats из state.json: журнал
-  // пополняется в момент закрытия сделки, а state.json — раз в 60 секунд,
-  // и карточки расходились бы с таблицей ниже на глазах у пользователя.
+// Статистика считается по самому журналу сделок, а не по stats из state.json:
+// журнал пополняется в момент закрытия сделки, а state.json — раз в 60 секунд,
+// и цифры расходились бы с таблицей на глазах у пользователя.
+function summarize(trades) {
   const pnl = trades.map(t => n(t.profit_usd));
   const wins = pnl.filter(v => v > 0);
   const losses = pnl.filter(v => v <= 0);
-  const net = pnl.reduce((a, v) => a + v, 0);
   const gross_win = wins.reduce((a, v) => a + v, 0);
   const gross_loss = Math.abs(losses.reduce((a, v) => a + v, 0));
   const avg = arr => (arr.length ? arr.reduce((a, v) => a + v, 0) / arr.length : 0);
-  const pf = gross_loss ? gross_win / gross_loss : 0;
+  return {
+    trades: pnl.length,
+    wins: wins.length,
+    losses: losses.length,
+    net: pnl.reduce((a, v) => a + v, 0),
+    winrate: pnl.length ? (wins.length / pnl.length) * 100 : 0,
+    avg_win: avg(wins),
+    avg_loss: avg(losses),
+    gross_loss,
+    profit_factor: gross_loss ? gross_win / gross_loss : 0,
+  };
+}
 
+// ---- переключатель ботов ---------------------------------------------------
+
+function renderBots() {
+  document.getElementById("bots").innerHTML = BOTS.map(b => {
+    const d = data[b.id];
+    let line;
+    if (!d) {
+      line = '<span class="small">загрузка…</span>';
+    } else if (!d.ok) {
+      line = '<span class="small neg">бот недоступен</span>';
+    } else {
+      const s = summarize(d.trades);
+      line = `<span class="big ${cls(s.net)}">${money(s.net)}$</span>
+              <span class="small">${s.trades} сделок · winrate ${s.winrate.toFixed(0)}%
+              · открыто ${(d.state.open_positions || []).length}</span>`;
+    }
+    const dot = !d ? "down" : d.ok ? "ok" : "down";
+    return `<button class="bot ${b.id === active ? "active" : ""}" data-bot="${b.id}">
+      <div class="title"><span class="dot ${dot}"></span>${esc(b.name)}</div>
+      <div class="desc">${esc(b.desc)}</div>
+      <div class="row">${line}</div>
+    </button>`;
+  }).join("");
+}
+
+function switchTo(id) {
+  if (!known(id) || id === active) return;
+  active = id;
+  try { localStorage.setItem(STORE_KEY, active); } catch (err) { /* не критично */ }
+  // replaceState, а не присваивание hash: переключение вкладок не должно
+  // засорять историю браузера — «назад» уводил бы со страницы через раз.
+  history.replaceState(null, "", "#" + active);
+  // Фильтры таблицы относятся к прошлому боту — сбрасываем, иначе новая
+  // вкладка откроется с непонятно откуда взявшимся поиском.
+  document.getElementById("q").value = "";
+  document.getElementById("filter").value = "all";
+  renderBots();
+  renderActive();
+  refresh();
+}
+
+document.getElementById("bots").addEventListener("click", e => {
+  const el = e.target.closest("[data-bot]");
+  if (el) switchTo(el.dataset.bot);
+});
+window.addEventListener("hashchange", () => switchTo(location.hash.replace("#", "")));
+
+// ---- карточки статистики ---------------------------------------------------
+
+function renderCards(state, trades) {
+  const s = summarize(trades);
   const cards = [
-    ["Итог, $", `<span class="${cls(net)}">${money(net)}</span>`, "сумма профита по закрытым сделкам"],
-    ["Сделок", pnl.length, `${wins.length} в плюс · ${losses.length} в минус`],
-    ["Winrate", (pnl.length ? (wins.length / pnl.length) * 100 : 0).toFixed(1) + "%", "доля прибыльных сделок"],
-    ["Профит-фактор", !pnl.length ? "—" : !gross_loss ? "∞" : pf.toFixed(2),
+    ["Итог, $", `<span class="${cls(s.net)}">${money(s.net)}</span>`, "сумма профита по закрытым сделкам"],
+    ["Сделок", s.trades, `${s.wins} в плюс · ${s.losses} в минус`],
+    ["Winrate", s.winrate.toFixed(1) + "%", "доля прибыльных сделок"],
+    ["Профит-фактор", !s.trades ? "—" : !s.gross_loss ? "∞" : s.profit_factor.toFixed(2),
       "заработано / потеряно; >1 — стратегия в плюсе"],
-    ["Средний плюс", `<span class="pos">${money(avg(wins))}</span>`, "на одну выигрышную сделку"],
-    ["Средний минус", `<span class="neg">${money(avg(losses))}</span>`, "на одну убыточную сделку"],
+    ["Средний плюс", `<span class="pos">${money(s.avg_win)}</span>`, "на одну выигрышную сделку"],
+    ["Средний минус", `<span class="neg">${money(s.avg_loss)}</span>`, "на одну убыточную сделку"],
     ["Открыто", (state.open_positions || []).length, "позиций прямо сейчас"],
     ["В наблюдении", (state.watchlist || []).length, "монет прошло фильтр отбора"],
   ];
@@ -272,8 +393,32 @@ function renderCurve(trades) {
                 vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
       <circle cx="${x(pts.length - 1)}" cy="${y(last)}" r="3" fill="${color}"/>
     </svg>`;
-  note.innerHTML = `итог <span class="${cls(last)}">${money(last)}$</span> ·
+  note.innerHTML = `итог <span class="${cls(last)}">${money(last)}</span>$ ·
      максимум ${money(hi)}$ · минимум ${money(lo)}$ · сделок ${pts.length}`;
+}
+
+// ---- лимитки (ТС плотностей) -----------------------------------------------
+
+function renderPending(state) {
+  const rows = state.pending_orders || [];
+  const section = document.getElementById("pendingSection");
+  // У ТС импульса лимиток нет вовсе — не показываем пустой раздел.
+  section.classList.toggle("hidden", !rows.length);
+  if (!rows.length) return;
+  document.getElementById("pendingCount").textContent = rows.length + " шт.";
+  document.getElementById("pending").innerHTML = table(
+    ["Монета", "Сторона", { label: "Цена лимитки", num: 1 }, { label: "Плотность", num: 1 },
+     { label: "Объём стены", num: 1 }, "Съедено", { label: "Ждём, с", num: 1 }],
+    rows,
+    o => `<tr>
+      <td class="sym">${esc(o.symbol)}</td>
+      <td><span class="tag ${o.side === "long" ? "long" : "short"}">${o.side === "long" ? "покупка" : "продажа"}</span></td>
+      <td class="num">${price(o.price)}</td>
+      <td class="num muted">${price(o.wall_price)}</td>
+      <td class="num">${usd(o.wall_notional)}</td>
+      <td><div class="bar"><i style="width:${Math.min(100, n(o.wall_eaten_pct)).toFixed(0)}%"></i></div></td>
+      <td class="num muted">${esc(o.age_sec)}</td>
+    </tr>`);
 }
 
 // ---- открытые позиции ------------------------------------------------------
@@ -282,22 +427,23 @@ function renderOpen(state) {
   const rows = state.open_positions || [];
   document.getElementById("openCount").textContent = rows.length ? rows.length + " шт." : "";
   document.getElementById("open").innerHTML = table(
-    ["Монета", "ТФ", "Открыта", { label: "Вход", num: 1 }, { label: "Сейчас", num: 1 },
+    ["Монета", "Сторона", "ТФ", "Открыта", { label: "Вход", num: 1 }, { label: "Сейчас", num: 1 },
      { label: "Стоп", num: 1 }, { label: "Тейк", num: 1 }, "Стоп ← → тейк",
      { label: "Лучший PnL, $", num: 1 }, { label: "Мин", num: 1 }],
     rows,
     p => {
-      // Где сейчас цена между стопом и тейком. Позиции короткие, поэтому
-      // стоп выше входа, а тейк ниже — берём min/max, чтобы шкала работала
-      // одинаково для обеих сторон.
+      // Где сейчас цена между стопом и тейком. Берём min/max, чтобы шкала
+      // работала одинаково и для лонга, и для шорта.
       const lo = Math.min(n(p.stop_price), n(p.take_price));
       const hi = Math.max(n(p.stop_price), n(p.take_price));
       const frac = hi > lo ? Math.min(1, Math.max(0, (n(p.last_price) - lo) / (hi - lo))) : 0.5;
       // Слева на шкале — то, что ближе к стопу (плохо), справа — к тейку.
       const pos = n(p.take_price) < n(p.stop_price) ? 1 - frac : frac;
+      const long = p.side === "long";
       return `<tr>
         <td class="sym">${esc(p.symbol)}</td>
-        <td><span class="tag">${esc(p.timeframe)}м</span></td>
+        <td><span class="tag ${long ? "long" : "short"}">${long ? "лонг" : "шорт"}</span></td>
+        <td><span class="tag">${esc(p.timeframe)}</span></td>
         <td class="muted">${esc(p.opened)}</td>
         <td class="num">${price(p.entry_price)}</td>
         <td class="num">${price(p.last_price)}</td>
@@ -313,12 +459,12 @@ function renderOpen(state) {
 // ---- сделки ----------------------------------------------------------------
 
 let sort = { key: "num", desc: true };
-let allTrades = [];
 
 function visibleTrades() {
+  const all = (data[active] && data[active].trades) || [];
   const q = document.getElementById("q").value.trim().toUpperCase();
   const f = document.getElementById("filter").value;
-  let rows = allTrades.filter(t => {
+  let rows = all.filter(t => {
     if (q && !String(t.symbol || "").toUpperCase().includes(q)) return false;
     if (f === "win" && n(t.profit_usd) < 0) return false;
     if (f === "loss" && n(t.profit_usd) >= 0) return false;
@@ -338,10 +484,11 @@ function visibleTrades() {
 }
 
 function renderTrades() {
+  const all = (data[active] && data[active].trades) || [];
   const rows = visibleTrades();
   const sum = rows.reduce((a, t) => a + n(t.profit_usd), 0);
-  document.getElementById("tradeCount").innerHTML = allTrades.length
-    ? `показано ${rows.length} из ${allTrades.length} · итог по выборке <span class="${cls(sum)}">${money(sum)}$</span>`
+  document.getElementById("tradeCount").innerHTML = all.length
+    ? `показано ${rows.length} из ${all.length} · итог по выборке <span class="${cls(sum)}">${money(sum)}$</span>`
     : "";
 
   document.getElementById("trades").innerHTML = table(
@@ -353,16 +500,17 @@ function renderTrades() {
     rows,
     t => {
       const side = String(t.side || "").toLowerCase();
+      const long = side.includes("long") || side.includes("buy");
       return `<tr>
         <td class="muted">${esc(t.num)}</td>
         <td class="sym">${esc(t.symbol)}</td>
-        <td><span class="tag ${side.includes("sell") || side.includes("short") ? "short" : "long"}">${esc(t.side)}</span></td>
-        <td><span class="tag">${esc(t.timeframe)}м</span></td>
+        <td><span class="tag ${long ? "long" : "short"}">${long ? "лонг" : "шорт"}</span></td>
+        <td><span class="tag">${esc(t.timeframe)}</span></td>
         <td class="muted">${esc(t.open_time)}</td>
         <td class="muted">${esc(t.close_time)}</td>
         <td class="num">${price(t.entry_price)}</td>
         <td class="num">${price(t.exit_price)}</td>
-        ${money_cell(t.profit_usd)}
+        <td class="num ${cls(t.profit_usd)}">${money(t.profit_usd)}</td>
         <td class="num ${cls(t.profit_pct_margin)}">${money(t.profit_pct_margin, 1)}%</td>
         <td class="num muted">${esc(t.duration_min)}</td>
         <td class="wrap">${esc(t.exit_reason)}</td>
@@ -388,17 +536,18 @@ function renderSignals(rows) {
   document.getElementById("sigCount").textContent = rows.length ? rows.length + " шт." : "";
   document.getElementById("signals").innerHTML = table(
     ["Время", "Монета", { label: "Цена", num: 1 }, "ТФ", { label: "Оценка", num: 1 }, "Решение",
-     { label: "Сутки, %", num: 1 }, { label: "Оборот, $", num: 1 }, "Заметки"],
+     { label: "Сутки, %", num: 1 }, { label: "Оборот, $", num: 1 }, "Стакан", "Заметки"],
     rows,
     s => `<tr>
       <td class="muted">${esc(s.time)}</td>
       <td class="sym">${esc(s.symbol)}</td>
       <td class="num">${price(s.price)}</td>
-      <td><span class="tag">${esc(s.timeframe)}м</span></td>
+      <td><span class="tag">${esc(s.timeframe)}</span></td>
       <td class="num">${esc(s.score)}</td>
       <td><span class="tag">${esc(s.action)}</span></td>
       <td class="num ${cls(s.change_24h_pct)}">${money(s.change_24h_pct, 1)}</td>
-      <td class="num muted">${n(s.turnover_24h_usd).toLocaleString("ru-RU", { maximumFractionDigits: 0 })}</td>
+      <td class="num muted">${usd(s.turnover_24h_usd)}</td>
+      <td class="wrap">${esc(s.book)}</td>
       <td class="wrap">${esc(s.notes)}</td>
     </tr>`);
 }
@@ -409,53 +558,44 @@ function setStatus(kind, text) {
   document.getElementById("status").innerHTML = `<span class="dot ${kind}"></span>${esc(text)}`;
 }
 
-let lastUpdated = "";
-let lastUpdatedSeen = Date.now();
+// Отметка обновления сравнивается сама с собой, а не с часами браузера: время
+// в state.json записано в TZ бота (Europe/Moscow), и у зрителя из другого
+// пояса разница часов читалась бы как «бот молчит».
+const seen = Object.create(null);   // botId -> { updated, at }
 
-function showError(msg) {
-  const b = document.getElementById("banner");
-  b.textContent = msg;
-  b.classList.add("show");
+function renderStatus(state) {
+  const updated = state.updated || "";
+  if (!updated) { setStatus("stale", "данных ещё нет"); return; }
+  const s = seen[active] || (seen[active] = { updated: "", at: Date.now() });
+  if (updated !== s.updated) { s.updated = updated; s.at = Date.now(); }
+  const silentSec = (Date.now() - s.at) / 1000;
+  setStatus(silentSec > 180 ? "stale" : "ok",
+            silentSec > 180 ? `бот молчит с ${updated}` : `обновлено ${updated}`);
 }
 
-async function refresh() {
-  let state, trades, signals, log;
-  try {
-    [state, trades, signals, log] = await Promise.all([
-      get("/state"), get("/trades?limit=2000"), get("/signals?limit=200"), get("/log?lines=200"),
-    ]);
-  } catch (err) {
-    setStatus("down", "бот недоступен");
-    showError("Не удалось получить данные бота (" + err.message + "). " +
-              "Похоже, под tradingbot не запущен — данные ниже могли устареть.");
+function renderActive() {
+  document.getElementById("csv").href = `/tb/${active}/trades.csv`;
+  const d = data[active];
+  const banner = document.getElementById("banner");
+  if (!d || !d.ok) {
+    if (d) {
+      setStatus("down", "бот недоступен");
+      banner.textContent = `Не удалось получить данные бота «${bot(active).name}» (${d.error}). ` +
+        "Похоже, его под не запущен — данные ниже могли устареть.";
+      banner.classList.add("show");
+    }
     return;
   }
-  document.getElementById("banner").classList.remove("show");
-
-  // state.json бот перезаписывает раз в 60 секунд. Если отметка перестала
-  // меняться — процесс жив (иначе не ответил бы), но торговый цикл встал.
-  //
-  // Сравниваем отметку саму с собой, а не с часами браузера: время в state.json
-  // записано в TZ бота (Europe/Moscow), и у зрителя из другого пояса разница
-  // часов читалась бы как «бот молчит».
-  const updated = state.updated || "";
-  if (!updated) {
-    setStatus("stale", "данных ещё нет");
-  } else {
-    if (updated !== lastUpdated) { lastUpdated = updated; lastUpdatedSeen = Date.now(); }
-    const silentSec = (Date.now() - lastUpdatedSeen) / 1000;
-    if (silentSec > 180) setStatus("stale", `бот молчит с ${updated}`);
-    else setStatus("ok", `обновлено ${updated}`);
-  }
-
-  allTrades = Array.isArray(trades) ? trades : [];
-  renderCards(state, allTrades);
-  renderCurve(allTrades);
-  renderOpen(state);
+  banner.classList.remove("show");
+  renderStatus(d.state);
+  renderCards(d.state, d.trades);
+  renderCurve(d.trades);
+  renderPending(d.state);
+  renderOpen(d.state);
   renderTrades();
-  renderSignals(Array.isArray(signals) ? signals : []);
+  renderSignals(d.signals || []);
 
-  const watch = state.watchlist || [];
+  const watch = d.state.watchlist || [];
   document.getElementById("watchCount").textContent = watch.length ? watch.length + " шт." : "";
   document.getElementById("watch").innerHTML = watch.length
     ? watch.map(w => `<span class="tag" style="margin:2px 4px 2px 0">${esc(w)}</span>`).join("")
@@ -464,8 +604,39 @@ async function refresh() {
   const pre = document.getElementById("log");
   // Хвост лога держим прижатым к низу, если пользователь его не отматывал.
   const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24;
-  pre.textContent = (log || []).join("\n");
+  pre.textContent = (d.log || []).join("\n");
   if (stick) pre.scrollTop = pre.scrollHeight;
+}
+
+async function loadBot(b) {
+  // Состояние и сделки тянем по всем ботам — из них считается сравнение
+  // во вкладках. Лог и сигналы весят больше и нужны только открытому боту.
+  const isActive = b.id === active;
+  try {
+    const [state, trades, signals, log] = await Promise.all([
+      get(b.id, "/state"),
+      get(b.id, "/trades?limit=2000"),
+      isActive ? get(b.id, "/signals?limit=200") : Promise.resolve([]),
+      isActive ? get(b.id, "/log?lines=200") : Promise.resolve([]),
+    ]);
+    data[b.id] = {
+      ok: true,
+      state: state || {},
+      trades: Array.isArray(trades) ? trades : [],
+      signals: Array.isArray(signals) ? signals : [],
+      log: Array.isArray(log) ? log : [],
+    };
+  } catch (err) {
+    // Один упавший бот не должен гасить панель целиком: его вкладка
+    // покажет «недоступен», остальные продолжат обновляться.
+    data[b.id] = { ok: false, error: err.message, state: {}, trades: [], signals: [], log: [] };
+  }
+}
+
+async function refresh() {
+  await Promise.all(BOTS.map(loadBot));
+  renderBots();
+  renderActive();
 }
 
 let timer = setInterval(refresh, REFRESH_MS);
@@ -475,6 +646,7 @@ pauseBtn.addEventListener("click", () => {
   else { timer = setInterval(refresh, REFRESH_MS); pauseBtn.textContent = "⏸ пауза"; pauseBtn.classList.remove("on"); refresh(); }
 });
 
+renderBots();
 refresh();
 </script>
 </body>

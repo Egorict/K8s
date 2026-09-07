@@ -132,7 +132,132 @@ def run_selftest(cfg: Config) -> None:
             results.append(_check("сделка записана в журнал брокера",
                                   len(broker.closed) == 1, f"PnL {trade.net_pnl_usd:+.2f}$"))
 
+    # --- 6. ТС плотностей ----------------------------------------------------
+    results.extend(run_density_selftest(cfg))
+
     passed = sum(1 for r in results if r)
     print(f"\nИтог: {passed}/{len(results)} проверок пройдено")
     if passed != len(results):
         raise SystemExit(1)
+
+
+def _book_snapshot(wall_index: int = 6, wall_mult: float = 24.0, with_wall: bool = True,
+                   wall_shrink: float = 1.0) -> tuple:
+    """Стакан вокруг 100$: ровные уровни плюс одна плотность на стороне bid.
+
+    wall_shrink=0.1 - от плотности осталось 10% (её едят);
+    with_wall=False - уровень исчез из стакана совсем (заявку сняли).
+    """
+    bids = [Level(100.0 - i * 0.05, 100.0) for i in range(20)]
+    asks = [Level(100.05 + i * 0.05, 100.0) for i in range(20)]
+    if with_wall:
+        bids[wall_index] = Level(bids[wall_index].price, 100.0 * wall_mult * wall_shrink)
+    else:
+        del bids[wall_index]
+    return bids, asks
+
+
+def run_density_selftest(cfg: Config) -> List[bool]:
+    """ТС плотностей: поиск стены, лимитка перед ней, выходы по судьбе стены."""
+    import dataclasses
+    import tempfile
+
+    from bot.density import DensityEngine, find_wall_setup
+    from bot.models import PendingOrder
+
+    print("\nТС плотностей (синтетический стакан)")
+    results: List[bool] = []
+    dcfg = cfg.density
+
+    # Движок пишет журнал, поэтому на время проверки уводим data_dir во временный
+    # каталог - настоящие journals бота самопроверка портить не должна.
+    original_dir = cfg.data_dir
+    cfg.data_dir = tempfile.mkdtemp(prefix="selftest-density-")
+    try:
+        engine = DensityEngine(cfg, client=None)  # сеть не понадобится
+        tracker = engine.books.tracker("TESTUSDT")
+
+        # Плотность стоит много снапшотов подряд - анти-спуфинг её пропускает.
+        view = None
+        for _ in range(dcfg.min_persist_snapshots + 2):
+            view = tracker.update(*_book_snapshot())
+        results.append(_check("настоящая bid-плотность найдена", view.genuine_bid_wall is not None,
+                              view.genuine_bid_wall.describe() if view.genuine_bid_wall else "нет"))
+
+        ticker = Ticker(symbol="TESTUSDT", last_price=view.mid, change_24h=0.02,
+                        turnover_24h=150_000_000, volume_24h=1_500_000)
+        setup = find_wall_setup(ticker, view, cfg)
+        results.append(_check("сетап от плотности собран", setup is not None,
+                              f"скор {setup.score:.2f}" if setup else "нет"))
+
+        if setup is not None:
+            results.append(_check("сторона сделки от bid-стены - покупка", setup.side == "long",
+                                  setup.side))
+            results.append(_check("лимитка стоит перед плотностью, а не в ней",
+                                  setup.entry_price > setup.wall.price,
+                                  f"{setup.entry_price:.4f} > {setup.wall.price:.4f}"))
+            results.append(_check("лимитка ниже рынка (осталась лимиткой)",
+                                  setup.entry_price < view.best_ask,
+                                  f"{setup.entry_price:.4f} < {view.best_ask:.4f}"))
+
+        # Короткоживущая стена (спуфер) сетапа давать не должна.
+        spoof_tracker = BookTracker(cfg=engine.books.cfg, symbol="SPOOFUSDT")
+        spoof_view = None
+        for _ in range(3):
+            spoof_view = spoof_tracker.update(*_book_snapshot())
+        results.append(_check("спуферская плотность сетапа не даёт",
+                              find_wall_setup(ticker, spoof_view, cfg) is None))
+
+        if setup is None:
+            return results
+
+        # --- исполнение лимитки ---------------------------------------------
+        order = PendingOrder(symbol=setup.symbol, side=setup.side, price=setup.entry_price,
+                             qty=cfg.risk.notional_usd / setup.entry_price,
+                             placed_at=time.time(), setup=setup)
+        results.append(_check("лимитка не исполняется, пока рынок выше",
+                              not engine._filled(order, view)))
+        touched = dataclasses.replace(view, best_ask=order.price, best_bid=order.price - 0.01)
+        results.append(_check("лимитка исполняется, когда рынок дошёл до цены",
+                              engine._filled(order, touched)))
+
+        position = engine.broker.open_from_limit(order)
+        results.append(_check("вход строго по цене лимитки (без проскальзывания)",
+                              abs(position.entry_price - order.price) < 1e-12))
+        results.append(_check("тейк выше входа (лонг)", position.take_price > position.entry_price))
+        results.append(_check("стоп ниже входа (лонг)", position.stop_price < position.entry_price))
+
+        profit = engine.broker.net_pnl(position, position.take_price)
+        results.append(_check(f"прибыль по тейку ≈ +{dcfg.take_profit_usd:.0f}$",
+                              abs(profit - dcfg.take_profit_usd) < 0.05, f"{profit:+.2f}$"))
+        loss = engine.broker.net_pnl(position, position.stop_price)
+        results.append(_check("стоп за плотностью ближе денежного",
+                              abs(loss) < dcfg.stop_loss_usd, f"{loss:+.2f}$"))
+
+        # --- выходы по судьбе плотности --------------------------------------
+        hold = engine._exit_reason(position, view, position.entry_price)
+        results.append(_check("пока плотность цела - держим", hold is None, hold or "держим"))
+
+        # Плотность едят: осталось 10% от максимума.
+        eaten_view = None
+        for _ in range(2):
+            eaten_view = tracker.update(*_book_snapshot(wall_shrink=0.10))
+        reason = engine._exit_reason(position, eaten_view, position.entry_price)
+        results.append(_check(f"выход при съедании {dcfg.wall_eaten_ratio * 100:.0f}% плотности",
+                              bool(reason) and "съедена" in (reason or ""), reason or "нет"))
+
+        # Заявку сняли: уровень пропал из стакана.
+        gone_tracker = BookTracker(cfg=engine.books.cfg, symbol="TESTUSDT")
+        for _ in range(dcfg.min_persist_snapshots + 2):
+            gone_tracker.update(*_book_snapshot())
+        gone_view = None
+        for _ in range(3):
+            gone_view = gone_tracker.update(*_book_snapshot(with_wall=False))
+        engine.books._trackers["TESTUSDT"] = gone_tracker
+        reason = engine._exit_reason(position, gone_view, position.entry_price)
+        results.append(_check("выход, когда плотность сняли",
+                              bool(reason) and "снята" in (reason or ""), reason or "нет"))
+    finally:
+        cfg.data_dir = original_dir
+
+    return results

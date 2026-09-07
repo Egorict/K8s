@@ -220,54 +220,73 @@ bot/journal.py           то, что пишет данные, которые с
 
 ---
 
-## 9. Как бот развёрнут в этом репозитории (маршрут `/tb`)
+## 9. Как боты развёрнуты в этом репозитории (маршрут `/tb`)
 
 Здесь уже есть кластер, ArgoCD и nginx-клиент, поэтому отдельный namespace и
-собственный ingress боту не нужны — он въезжает в общую схему как ещё один сервис
-в неймспейсе `app`, а его данные показывает страница `/tb` на том же адресе,
-что и остальной сайт (NodePort клиента, `http://<IP сервера>:30081/tb`).
+собственный ingress ботам не нужны — они въезжают в общую схему как ещё два
+сервиса в неймспейсе `app`, а их данные показывает страница `/tb` на том же
+адресе, что и остальной сайт (NodePort клиента, `http://<IP сервера>:30081/tb`).
+
+**Один под = одна ТС = свой том.** Общий журнал смешал бы статистику двух систем,
+а сравнить их — весь смысл затеи. Образ у обоих подов один, различается ключ
+`--strategy`.
 
 ```
 браузер :30081/tb
       │
-      ├── /tb            ─► nginx клиента отдаёт apps/client/html/tb.html (статика из образа)
-      └── /tb/api/state  ─► nginx проксирует ─► Service tradingbot:8080 ─► /api/state
-                                                    │
-                                                под tradingbot ── PVC /data ── api.bybit.com
+      ├── /tb                    ─► nginx отдаёт apps/client/html/tb.html (статика из образа)
+      ├── /tb/api/impulse/state  ─► Service tradingbot-impulse:8080 ─► /api/state
+      │                                 └─ под impulse ── PVC ── api.bybit.com
+      └── /tb/api/density/state  ─► Service tradingbot-density:8080 ─► /api/state
+                                        └─ под density ── PVC ── api.bybit.com
 ```
+
+На странице боты переключаются вкладками, и в самих вкладках сразу видны итог,
+число сделок и winrate каждой ТС — сравнение не требует переключения.
+Ссылка на конкретного бота: `/tb#density`.
 
 Что где лежит:
 
 | Файл | Роль |
 |------|------|
-| `apps/tradingbot/**` | код бота; сборка образа `ermakov880/devops-project-tradingbot` |
-| `apps/client/html/tb.html` | сама страница: карточки, кривая результата, таблицы, лог |
-| `apps/client/nginx.conf` | маршруты `/tb`, `/tb/api/`, `/tb/trades.csv` |
-| `infrastructure/k8s/base/tradingbot-chart/` | Deployment, Service, PVC (longhorn, 2Gi), NetworkPolicy |
+| `apps/tradingbot/**` | код обеих ТС; сборка образа `ermakov880/devops-project-tradingbot` |
+| `apps/client/html/tb.html` | страница: вкладки ботов, карточки, кривая, лимитки, таблицы, лог |
+| `apps/client/nginx.conf` | маршруты `/tb`, `/tb/api/<бот>/`, `/tb/<бот>/trades.csv` |
+| `infrastructure/k8s/base/tradingbot-chart/` | чарт: по Deployment, Service и PVC на каждого бота из `values.bots` |
 | `infrastructure/k8s/argocd/tradingbot-app.yaml` | ArgoCD-приложение, namespace `app` |
 | `.github/workflows/deploy.yaml` | selftest → сборка образа → trivy → обновление тега в values |
 
 Отличия от варианта из раздела 5:
 
 - **Namespace `app`, а не `tradingbot`.** В `app` действует `default-deny-all`, и
-  NetworkPolicy бота пускает к нему только под с меткой `app: myapp` (nginx).
-  Снаружи кластера порт бота не открыт вовсе — панель доступна лишь через `/tb`.
+  NetworkPolicy ботов пускает к ним только под с меткой `app: myapp` (nginx).
+  Снаружи кластера порты ботов не открыты вовсе — панель доступна лишь через `/tb`.
 - **Своя страница бота (`GET /` в поде) наружу не отдаётся.** Она ходит за данными
   в абсолютный `/api/state`, а этот префикс у клиента занят `server-app`.
-  Поэтому страница живёт в образе клиента и читает `/tb/api/...`.
+  Поэтому страница живёт в образе клиента и читает `/tb/api/<бот>/...`.
 - **Деплой через ArgoCD.** `kubectl apply` руками не нужен: пуш в master →
   CI собирает образ и подставляет git SHA в `values.yaml` → ArgoCD синхронизирует.
-  Параметры ТС меняются в `values.yaml` (`bot.args`), а не `kubectl edit deploy`.
+  Параметры ТС меняются в `values.yaml` (`bots[].args`), а не `kubectl edit deploy`.
 - **Ресурсы урезаны** под квоту неймспейса `app`: 100m/128Mi в запросах,
-  300m/256Mi в лимитах.
+  300m/256Mi в лимитах — на каждого бота.
+
+### Как добавить третью ТС
+
+Три места, все рядом:
+
+1. `apps/tradingbot/bot/<своя>.py` + ветка в `run.py: _make_engine()` и значение
+   в `--strategy`;
+2. элемент в `bots[]` в `infrastructure/k8s/base/tradingbot-chart/values.yaml`
+   (появятся Deployment, Service и PVC) и роут в `apps/client/nginx.conf`;
+3. элемент в `BOTS` в `apps/client/html/tb.html` — вкладка появится сама.
 
 Полезное:
 
 ```bash
-kubectl -n app logs -f deploy/tradingbot
-kubectl -n app exec deploy/tradingbot -- python run.py report      # сводка по сделкам
-kubectl -n app exec deploy/tradingbot -- python run.py selftest    # логика без сети
-kubectl -n app port-forward deploy/tradingbot 8080:8080            # родная панель бота
+kubectl -n app logs -f deploy/tradingbot-density
+kubectl -n app exec deploy/tradingbot-density -- python run.py report      # сводка по сделкам
+kubectl -n app exec deploy/tradingbot-density -- python run.py selftest    # логика без сети
+kubectl -n app port-forward deploy/tradingbot-density 8080:8080            # родная панель бота
 ```
 
 Предупреждение из раздела 7 остаётся в силе: панель не защищена авторизацией.

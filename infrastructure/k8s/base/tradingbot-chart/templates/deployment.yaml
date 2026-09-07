@@ -1,11 +1,16 @@
+{{- range .Values.bots }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: tradingbot
+  name: tradingbot-{{ .name }}
   labels:
     app: tradingbot
+    bot: {{ .name }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  # Строго 1: две реплики одной ТС писали бы сделки в один и тот же файл,
+  # и статистика превратилась бы в кашу.
+  replicas: 1
   # RWO-том нельзя держать двумя подами одновременно: при RollingUpdate новый под
   # ждал бы том, который ещё держит старый, и выкладка вставала бы намертво.
   strategy:
@@ -13,10 +18,12 @@ spec:
   selector:
     matchLabels:
       app: tradingbot
+      bot: {{ .name }}
   template:
     metadata:
       labels:
         app: tradingbot
+        bot: {{ .name }}
     spec:
       # Бот не обращается к Kubernetes API — токен ServiceAccount ему не нужен.
       automountServiceAccountToken: false
@@ -31,21 +38,25 @@ spec:
           type: RuntimeDefault
       containers:
         - name: bot
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: {{ toJson .Values.bot.args }}
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          args: {{ toJson .args }}
           env:
             - name: TZ
-              value: {{ .Values.bot.timezone | quote }}
+              value: {{ $.Values.bot.timezone | quote }}
             - name: BOT_DATA_DIR
-              value: {{ .Values.data.mountPath | quote }}
+              value: {{ $.Values.data.mountPath | quote }}
             - name: BOT_WEB
               value: "1"
             - name: BOT_WEB_PORT
-              value: {{ .Values.service.port | quote }}
+              value: {{ $.Values.service.port | quote }}
+            # Дублирует --strategy в args: если аргументы когда-нибудь
+            # перепишут через values, ТС всё равно останется той же.
+            - name: BOT_STRATEGY
+              value: {{ .strategy | quote }}
           ports:
             - name: http
-              containerPort: {{ .Values.service.port }}
+              containerPort: {{ $.Values.service.port }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -53,7 +64,7 @@ spec:
               drop: ["ALL"]
           volumeMounts:
             - name: data
-              mountPath: {{ .Values.data.mountPath }}
+              mountPath: {{ $.Values.data.mountPath }}
             # readOnlyRootFilesystem: true — временные файлы писать больше некуда.
             - name: tmp
               mountPath: /tmp
@@ -72,16 +83,17 @@ spec:
             failureThreshold: 3
           resources:
             requests:
-              cpu: {{ .Values.resources.requests.cpu }}
-              memory: {{ .Values.resources.requests.memory }}
+              cpu: {{ $.Values.resources.requests.cpu }}
+              memory: {{ $.Values.resources.requests.memory }}
             limits:
-              cpu: {{ .Values.resources.limits.cpu }}
-              memory: {{ .Values.resources.limits.memory }}
+              cpu: {{ $.Values.resources.limits.cpu }}
+              memory: {{ $.Values.resources.limits.memory }}
       # Хватает, чтобы дописать журнал по SIGTERM.
       terminationGracePeriodSeconds: 20
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: {{ .Values.data.claimName }}
+            claimName: tradingbot-{{ .name }}-data
         - name: tmp
           emptyDir: {}
+{{- end }}

@@ -67,7 +67,7 @@ class BookTracker:
         zone_bids = self._zone(bids, mid)
         zone_asks = self._zone(asks, mid)
         if not zone_bids or not zone_asks:
-            return OrderbookView(mid=mid)
+            return OrderbookView(mid=mid, best_bid=bids[0].price, best_ask=asks[0].price)
 
         bid_notional = sum(l.notional for l in zone_bids)
         ask_notional = sum(l.notional for l in zone_asks)
@@ -156,6 +156,8 @@ class BookTracker:
         genuine_bid = next((w for w in walls if w.side == "bid" and w.genuine), None)
 
         return OrderbookView(
+            best_bid=bids[0].price,
+            best_ask=asks[0].price,
             mid=mid,
             imbalance=imbalance,
             walls=walls[:6],
@@ -168,6 +170,28 @@ class BookTracker:
     def ready(self) -> bool:
         """История набрана - анти-спуфинг фильтру есть на что опереться."""
         return self.updates >= self.cfg.min_persist_snapshots
+
+    def wall_status(self, side: str, price: float) -> Dict[str, float]:
+        """Что стало с конкретной плотностью: съели её, сняли или она стоит.
+
+        Нужно ТС плотностей: сделка живёт ровно столько, сколько живёт уровень,
+        под который она открыта. `eaten` - доля, съеденная от максимального
+        размера уровня; 1.0 означает "уровня в стакане больше нет".
+        """
+        state = self._levels.get((side, price))
+        if state is None:
+            # Уровень выбыл из истории (пропал в двух снапшотах подряд).
+            return {"present": 0.0, "eaten": 1.0, "last_notional": 0.0,
+                    "max_notional": 0.0, "seen": 0.0}
+        present = 1.0 if state.missed == 0 else 0.0
+        eaten = 1.0 if not present else 1.0 - state.last_size / max(state.max_size, 1e-9)
+        return {
+            "present": present,
+            "eaten": max(0.0, min(1.0, eaten)),
+            "last_notional": state.last_size,
+            "max_notional": state.max_size,
+            "seen": float(state.seen),
+        }
 
 
 class BookManager:

@@ -9,26 +9,40 @@ image:
   # смотри фильтр "bot" в .github/workflows/deploy.yaml.
   tag: bootstrap
   pullPolicy: IfNotPresent
-# Строго 1: две реплики торговали бы одну стратегию в один и тот же файл,
-# а PVC у нас ReadWriteOnce — второму поду том всё равно не отдадут.
-replicaCount: 1
+
+# Боты. Один под = одна торговая система = свой том с журналом, поэтому
+# статистика по каждой ТС остаётся чистой и их можно честно сравнивать.
+# Образ у всех один и тот же, различие — ключ --strategy.
+#
+# Добавить третью ТС = дописать сюда элемент (и роут в apps/client/nginx.conf,
+# и вкладку в apps/client/html/tb.html).
+bots:
+  - name: impulse
+    # Строго 1 реплика: две писали бы сделки в один файл, да и PVC
+    # ReadWriteOnce второму поду не отдадут.
+    strategy: impulse
+    args: ["run", "--web", "--strategy", "impulse"]
+    storage: 2Gi
+  - name: density
+    strategy: density
+    args: ["run", "--web", "--strategy", "density"]
+    storage: 2Gi
+
 service:
-  # ClusterIP: снаружи бот не доступен. Страница /tb живёт в nginx клиента,
-  # он же проксирует на /tb/api/ — то же решение, что и для server-app.
+  # ClusterIP: снаружи боты не доступны. Страница /tb живёт в nginx клиента,
+  # он же проксирует на /tb/api/<бот>/ — то же решение, что и для server-app.
   type: ClusterIP
   port: 8080
-# Журналы и сделки на отдельном томе: перезапуск пода не должен стирать
-# историю сделок. Тот же longhorn, что и у архива скриншотов.
+
 data:
-  claimName: tradingbot-data
-  size: 2Gi
   storageClass: longhorn
   mountPath: /data
-# Параметры торговой стратегии. Всё, что не задано здесь, берётся из bot/config.py.
+
 bot:
   timezone: Europe/Moscow
-  # Аргументы run.py — маржа, плечо, стоп, тейк меняются без пересборки образа.
-  args: ["run", "--web"]
+
+# На каждого бота. В неймспейсе app действует ResourceQuota, и два бота
+# должны в неё влезать вместе с клиентом, сервером и базой.
 resources:
   requests:
     cpu: 100m
@@ -36,6 +50,7 @@ resources:
   limits:
     cpu: 300m
     memory: 256Mi
-# Биржа. Единственное исходящее соединение бота наружу кластера.
+
+# Биржа. Единственное исходящее соединение ботов наружу кластера.
 exchange:
   port: 443

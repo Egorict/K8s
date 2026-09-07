@@ -1,13 +1,19 @@
-# Том с данными — единственный источник для страницы /tb:
-#   /data/state.json  — открытые позиции и статистика (перезапись раз в 60 с)
-#   /data/trades.csv  — закрытые сделки (дописывается в момент закрытия)
+{{- range .Values.bots }}
+---
+# Том с журналом одного бота — единственный источник для его вкладки на /tb:
+#   /data/state.json  — открытые позиции, статистика, выставленные лимитки
+#   /data/trades.csv  — закрытые сделки
 #   /data/signals.csv — сработавшие сетапы
 #   /data/bot.log     — лог
+# У каждой ТС том свой: общий файл сделок смешал бы статистику двух систем.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ .Values.data.claimName }}
-  namespace: {{ .Release.Namespace }}
+  name: tradingbot-{{ .name }}-data
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: tradingbot
+    bot: {{ .name }}
   # Как и у архива клиента: том переживает удаление релиза, иначе ArgoCD
   # снёс бы вместе с чартом всю историю сделок.
   annotations:
@@ -17,5 +23,6 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: {{ .Values.data.size }}
-  storageClassName: {{ .Values.data.storageClass }}
+      storage: {{ .storage | default "2Gi" }}
+  storageClassName: {{ $.Values.data.storageClass }}
+{{- end }}
