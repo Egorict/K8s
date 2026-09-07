@@ -7,7 +7,7 @@ image:
   # CI заменит её на SHA коммита. Руками сюда писать тег не нужно; если в поде
   # ImagePullBackOff на теге bootstrap — значит сборка образа не запускалась,
   # смотри фильтр "bot" в .github/workflows/deploy.yaml.
-  tag: 561384ac49858d2f0eea3d5fa666b520bb8e1586
+  tag: 6b25663147afd62c6b1eac3e4631a42b28af8cce
   pullPolicy: IfNotPresent
 # Боты. Один под = одна торговая система = свой том с журналом, поэтому
 # статистика по каждой ТС остаётся чистой и их можно честно сравнивать.
@@ -40,7 +40,6 @@ bots:
     strategy: btc
     args: ["run", "--web", "--strategy", "btc"]
     storage: 2Gi
-
 service:
   # ClusterIP: снаружи боты не доступны. Страница /tb живёт в nginx клиента,
   # он же проксирует на /tb/api/<бот>/ — то же решение, что и для server-app.
