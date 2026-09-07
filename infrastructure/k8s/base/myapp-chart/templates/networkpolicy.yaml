@@ -16,12 +16,21 @@ spec:
         - protocol: TCP
           port: {{ .Values.service.targetPort }}
   egress:
-    # nginx проксирует /api на сервер — это единственное исходящее соединение
-    # клиента (DNS разрешён отдельно, политикой allow-dns-egress).
+    # nginx проксирует /api на сервер (DNS разрешён отдельно, политикой
+    # allow-dns-egress).
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: server
+      ports:
+        - protocol: TCP
+          port: 8080
+    # ...и /tb/api на трейдинг-бота: страница /tb лежит в образе клиента,
+    # а данные берёт из пода бота через этот же nginx.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: tradingbot
       ports:
         - protocol: TCP
           port: 8080

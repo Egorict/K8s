@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tradingbot
+  labels:
+    app: tradingbot
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # RWO-том нельзя держать двумя подами одновременно: при RollingUpdate новый под
+  # ждал бы том, который ещё держит старый, и выкладка вставала бы намертво.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tradingbot
+  template:
+    metadata:
+      labels:
+        app: tradingbot
+    spec:
+      # Бот не обращается к Kubernetes API — токен ServiceAccount ему не нужен.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        # fsGroup нужен, чтобы непривилегированный процесс мог писать на том
+        # Longhorn: сам том создаётся с владельцем root.
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bot
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: {{ toJson .Values.bot.args }}
+          env:
+            - name: TZ
+              value: {{ .Values.bot.timezone | quote }}
+            - name: BOT_DATA_DIR
+              value: {{ .Values.data.mountPath | quote }}
+            - name: BOT_WEB
+              value: "1"
+            - name: BOT_WEB_PORT
+              value: {{ .Values.service.port | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.data.mountPath }}
+            # readOnlyRootFilesystem: true — временные файлы писать больше некуда.
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}
+      # Хватает, чтобы дописать журнал по SIGTERM.
+      terminationGracePeriodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.data.claimName }}
+        - name: tmp
+          emptyDir: {}

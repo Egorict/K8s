@@ -19,3 +19,11 @@ node_modules/
 .env
 .env.local
 .env.*.local
+
+# Python (трейдинг-бот)
+__pycache__/
+*.py[cod]
+
+# Журналы бота: пишутся при локальном запуске и на PVC в кластере,
+# в git им не место — это данные, а не код.
+apps/tradingbot/data/

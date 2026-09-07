@@ -1,0 +1,9 @@
+data/
+*.bat
+*.log
+__pycache__/
+*.pyc
+.git/
+.venv/
+README.md
+setupToServer.md

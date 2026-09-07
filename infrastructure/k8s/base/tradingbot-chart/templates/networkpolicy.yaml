@@ -1,0 +1,39 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tradingbot-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: tradingbot
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Панель ничем не защищена — она просто читает файлы и отдаёт JSON.
+    # Поэтому доступ к ней есть только у nginx клиента, который проксирует
+    # /tb/api/. Снаружи кластера к боту не попасть вовсе.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: myapp
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+  egress:
+    # Единственное исходящее соединение: публичный REST биржи по HTTPS.
+    # Адрес api.bybit.com меняется (CDN), поэтому правило по порту, а не по IP;
+    # внутрикластерные и приватные сети из него вычтены, чтобы это не
+    # превратилось в разрешение ходить к соседним подам.
+    # DNS разрешён отдельно — политикой allow-dns-egress в неймспейсе.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8        # поды (10.244.0.0/16), сервисы и приватная сеть
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16    # link-local, в том числе метаданные облака
+      ports:
+        - protocol: TCP
+          port: {{ .Values.exchange.port }}

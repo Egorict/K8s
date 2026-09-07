@@ -1,0 +1,21 @@
+# Том с данными — единственный источник для страницы /tb:
+#   /data/state.json  — открытые позиции и статистика (перезапись раз в 60 с)
+#   /data/trades.csv  — закрытые сделки (дописывается в момент закрытия)
+#   /data/signals.csv — сработавшие сетапы
+#   /data/bot.log     — лог
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.data.claimName }}
+  namespace: {{ .Release.Namespace }}
+  # Как и у архива клиента: том переживает удаление релиза, иначе ArgoCD
+  # снёс бы вместе с чартом всю историю сделок.
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.data.size }}
+  storageClassName: {{ .Values.data.storageClass }}

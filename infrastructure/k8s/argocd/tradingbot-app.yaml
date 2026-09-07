@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tradingbot-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Egorict/K8s.git
+    targetRevision: HEAD
+    path: infrastructure/k8s/base/tradingbot-chart
+  destination:
+    server: https://kubernetes.default.svc
+    # Тот же неймспейс, что и клиент: nginx проксирует на бота по имени сервиса,
+    # а NetworkPolicy пускает к нему только под с label app: myapp.
+    namespace: app
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

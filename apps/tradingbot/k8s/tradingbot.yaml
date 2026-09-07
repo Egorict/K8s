@@ -1,0 +1,148 @@
+# Всё, что нужно для запуска бота в Kubernetes:
+#   kubectl apply -f k8s/tradingbot.yaml
+#
+# Ресурсы: namespace, PVC под журналы, ConfigMap с параметрами ТС,
+# Deployment (бот + веб-панель в одном поде), Service, Ingress (опционально).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tradingbot
+---
+# Том с данными. Именно отсюда веб-панель берёт всё, что рисует:
+#   /data/state.json  - открытые позиции и статистика
+#   /data/trades.csv  - закрытые сделки
+#   /data/signals.csv - сработавшие сетапы
+#   /data/bot.log     - лог
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tradingbot-data
+  namespace: tradingbot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  # storageClassName: standard   # раскомментируй, если дефолтного StorageClass нет
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tradingbot-config
+  namespace: tradingbot
+data:
+  TZ: "Europe/Moscow"
+  BOT_DATA_DIR: "/data"
+  BOT_WEB: "1"
+  BOT_WEB_PORT: "8080"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tradingbot
+  namespace: tradingbot
+  labels:
+    app: tradingbot
+spec:
+  replicas: 1              # строго 1: два бота торговали бы одну ТС в один файл
+  strategy:
+    type: Recreate         # RWO-том нельзя держать двумя подами одновременно
+  selector:
+    matchLabels:
+      app: tradingbot
+  template:
+    metadata:
+      labels:
+        app: tradingbot
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: bot
+          image: tradingbot:1.0.0        # подставь свой registry/тег
+          imagePullPolicy: IfNotPresent
+          args: ["run", "--web"]
+          envFrom:
+            - configMapRef:
+                name: tradingbot-config
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      terminationGracePeriodSeconds: 20   # хватает, чтобы дописать журнал по SIGTERM
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: tradingbot-data
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tradingbot
+  namespace: tradingbot
+spec:
+  type: ClusterIP          # для доступа снаружи: NodePort или Ingress ниже
+  selector:
+    app: tradingbot
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Ingress нужен, только если на сервере есть ingress-контроллер и домен.
+# Иначе смотри в setupToServer.md вариант с port-forward или NodePort.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tradingbot
+  namespace: tradingbot
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: bot.example.com          # ЗАМЕНИ на свой домен
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tradingbot
+                port:
+                  number: 80

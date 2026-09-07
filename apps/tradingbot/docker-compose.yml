@@ -1,0 +1,16 @@
+# Локальный запуск без Kubernetes: docker compose up -d
+services:
+  bot:
+    build: .
+    container_name: tradingbot
+    restart: unless-stopped
+    ports:
+      - "8080:8080"          # веб-панель: http://localhost:8080
+    volumes:
+      - bot-data:/data       # журналы переживают пересоздание контейнера
+    environment:
+      TZ: Europe/Moscow
+    command: ["run", "--web"]
+
+volumes:
+  bot-data:

@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Трейдинг-бот · панель</title>
+<!--
+  Страница отдаётся nginx клиента по адресу /tb (см. apps/client/nginx.conf).
+  Данные забираются с /tb/api/... — nginx проксирует их в под tradingbot,
+  срезая префикс: /tb/api/state -> под: /api/state.
+
+  Своей страницы у бота наружу нет: она ходит в абсолютный /api/state,
+  а этот префикс на клиенте занят server-app.
+-->
+<style>
+  :root {
+    --bg: #0f1216; --card: #171b21; --card2: #1c212a; --line: #262c35;
+    --fg: #e6e9ee; --dim: #8a93a0; --dim2: #616b7a;
+    --green: #3fbf7f; --red: #e5555a; --accent: #5b8def; --warn: #e0a75e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  header {
+    padding: 14px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    position: sticky; top: 0; background: var(--bg); z-index: 5;
+  }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .sub { color: var(--dim); font-size: 12px; }
+  .spacer { flex: 1 1 auto; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dot.ok { background: var(--green); }
+  .dot.stale { background: var(--warn); }
+  .dot.down { background: var(--red); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button {
+    background: var(--card); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 7px; padding: 5px 11px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--dim2); }
+  button.on { border-color: var(--accent); color: var(--accent); }
+
+  main { padding: 18px 24px 60px; max-width: 1500px; }
+  .banner {
+    display: none; margin-bottom: 16px; padding: 10px 14px; border-radius: 8px;
+    background: rgba(229, 85, 90, .12); border: 1px solid rgba(229, 85, 90, .4); color: #f0a5a8;
+  }
+  .banner.show { display: block; }
+
+  .cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); margin-bottom: 22px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .card .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .card .v { font-size: 23px; font-weight: 600; margin-top: 3px; }
+  .card .h { color: var(--dim2); font-size: 11px; margin-top: 3px; }
+
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim);
+       margin: 0; font-weight: 600; }
+  section { margin-top: 26px; }
+  .head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+  .count { color: var(--dim2); font-size: 12px; }
+
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  .scroll { overflow-x: auto; }
+  /* Длинные таблицы прокручиваются внутри себя, а не тянут страницу вниз.
+     Заодно это делает шапку по-настоящему липкой: sticky отсчитывается от
+     ближайшего прокручиваемого предка, и здесь это сам блок таблицы. */
+  .tall { max-height: 70vh; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--dim); font-weight: 600; font-size: 11.5px; text-transform: uppercase;
+       letter-spacing: .04em; position: sticky; top: 0; z-index: 1;
+       background: var(--card); cursor: pointer; user-select: none; }
+  th.no-sort { cursor: default; }
+  th .arrow { color: var(--accent); }
+  tbody tr:hover { background: var(--card2); }
+  tr:last-child td { border-bottom: none; }
+  td.num { text-align: right; }
+  th.num { text-align: right; }
+  .pos { color: var(--green); } .neg { color: var(--red); }
+  .sym { font-weight: 600; }
+  .muted { color: var(--dim); }
+  .wrap { white-space: normal; max-width: 380px; color: var(--dim); font-size: 12.5px; }
+  .empty { padding: 22px; color: var(--dim2); }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 11.5px;
+         border: 1px solid var(--line); background: var(--card2); color: var(--dim); }
+  .tag.short { color: #e88; border-color: rgba(229,85,90,.35); }
+  .tag.long { color: #8d8; border-color: rgba(63,191,127,.35); }
+
+  input[type=search], select {
+    background: var(--card); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 7px; padding: 5px 9px; font: inherit; font-size: 13px;
+  }
+
+  /* Шкала «где цена между стопом и тейком» для открытых позиций. */
+  .rail { position: relative; width: 150px; height: 6px; border-radius: 3px;
+          background: linear-gradient(90deg, var(--red), var(--dim2) 50%, var(--green)); }
+  .rail i { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--fg); border-radius: 1px; }
+
+  pre { margin: 0; padding: 12px 14px; overflow: auto; font-size: 12px; line-height: 1.55;
+        color: var(--dim); max-height: 340px; font-family: ui-monospace, Consolas, monospace; }
+  .chart { padding: 12px 14px 4px; }
+  .chart svg { width: 100%; height: 160px; display: block; }
+  .legend { color: var(--dim2); font-size: 11.5px; padding: 0 14px 12px; }
+  details > summary { cursor: pointer; list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  .chev { color: var(--dim2); font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Трейдинг-бот</h1>
+  <span class="sub" id="status"><span class="dot down"></span>подключение…</span>
+  <span class="spacer"></span>
+  <button id="pause" title="Пауза автообновления">⏸ пауза</button>
+  <a class="sub" href="/tb/trades.csv">скачать trades.csv</a>
+</header>
+
+<main>
+  <div class="banner" id="banner"></div>
+
+  <div class="cards" id="cards"></div>
+
+  <section>
+    <div class="head"><h2>Кривая результата</h2>
+      <span class="count" id="curveNote"></span></div>
+    <div class="panel">
+      <div class="chart" id="curve"></div>
+      <div class="legend">Накопленный итог по закрытым сделкам, доллары. Каждая точка — одна сделка.</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="head"><h2>Открытые позиции</h2><span class="count" id="openCount"></span></div>
+    <div class="panel scroll" id="open"></div>
+  </section>
+
+  <section>
+    <div class="head">
+      <h2>Сделки</h2><span class="count" id="tradeCount"></span>
+      <span class="spacer"></span>
+      <input type="search" id="q" placeholder="монета…" autocomplete="off">
+      <select id="filter">
+        <option value="all">все</option>
+        <option value="win">только плюс</option>
+        <option value="loss">только минус</option>
+      </select>
+    </div>
+    <div class="panel scroll tall" id="trades"></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>Наблюдение</h2><span class="count" id="watchCount"></span></div>
+    <div class="panel"><div id="watch" class="wrap" style="padding:12px 14px;max-width:none"></div></div>
+  </section>
+
+  <section>
+    <details>
+      <summary class="head"><h2>Сигналы <span class="chev">▾</span></h2><span class="count" id="sigCount"></span></summary>
+      <div class="panel scroll tall" id="signals"></div>
+    </details>
+  </section>
+
+  <section>
+    <details open>
+      <summary class="head"><h2>Лог <span class="chev">▾</span></h2></summary>
+      <div class="panel"><pre id="log"></pre></div>
+    </details>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+const API = "/tb/api";
+const REFRESH_MS = 5000;
+
+// ---- утилиты ---------------------------------------------------------------
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const n = v => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
+// CSV отдаёт всё строками, а цены у альткоинов бывают вида 0.00004312 —
+// поэтому значащие цифры, а не фиксированные два знака после запятой.
+const price = v => { const x = Number(v); if (!Number.isFinite(x)) return esc(v);
+  return x >= 100 ? x.toFixed(2) : x >= 1 ? x.toFixed(4) : x.toPrecision(4); };
+const money = (v, d = 2) => (n(v) >= 0 ? "+" : "−") + Math.abs(n(v)).toFixed(d);
+const cls = v => (n(v) >= 0 ? "pos" : "neg");
+const money_cell = (v, suffix = "") => `<td class="num ${cls(v)}">${money(v)}${suffix}</td>`;
+
+async function get(path, fallback) {
+  const r = await fetch(API + path, { cache: "no-store" });
+  if (!r.ok) throw new Error(path + " -> " + r.status);
+  return r.json();
+}
+
+function table(cols, rows, render) {
+  if (!rows.length) return '<div class="empty">пока пусто</div>';
+  const head = cols.map((c, i) => {
+    const label = typeof c === "string" ? c : c.label;
+    const numeric = typeof c === "object" && c.num;
+    const key = typeof c === "object" ? c.key : null;
+    const arrow = sort.key === key ? `<span class="arrow">${sort.desc ? "▾" : "▴"}</span>` : "";
+    return `<th class="${numeric ? "num " : ""}${key ? "" : "no-sort"}" ${key ? `data-key="${key}"` : ""}>${label} ${arrow}</th>`;
+  }).join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${rows.map(render).join("")}</tbody></table>`;
+}
+
+// ---- карточки статистики ---------------------------------------------------
+
+function renderCards(state, trades) {
+  // Считаем по самому журналу сделок, а не по stats из state.json: журнал
+  // пополняется в момент закрытия сделки, а state.json — раз в 60 секунд,
+  // и карточки расходились бы с таблицей ниже на глазах у пользователя.
+  const pnl = trades.map(t => n(t.profit_usd));
+  const wins = pnl.filter(v => v > 0);
+  const losses = pnl.filter(v => v <= 0);
+  const net = pnl.reduce((a, v) => a + v, 0);
+  const gross_win = wins.reduce((a, v) => a + v, 0);
+  const gross_loss = Math.abs(losses.reduce((a, v) => a + v, 0));
+  const avg = arr => (arr.length ? arr.reduce((a, v) => a + v, 0) / arr.length : 0);
+  const pf = gross_loss ? gross_win / gross_loss : 0;
+
+  const cards = [
+    ["Итог, $", `<span class="${cls(net)}">${money(net)}</span>`, "сумма профита по закрытым сделкам"],
+    ["Сделок", pnl.length, `${wins.length} в плюс · ${losses.length} в минус`],
+    ["Winrate", (pnl.length ? (wins.length / pnl.length) * 100 : 0).toFixed(1) + "%", "доля прибыльных сделок"],
+    ["Профит-фактор", !pnl.length ? "—" : !gross_loss ? "∞" : pf.toFixed(2),
+      "заработано / потеряно; >1 — стратегия в плюсе"],
+    ["Средний плюс", `<span class="pos">${money(avg(wins))}</span>`, "на одну выигрышную сделку"],
+    ["Средний минус", `<span class="neg">${money(avg(losses))}</span>`, "на одну убыточную сделку"],
+    ["Открыто", (state.open_positions || []).length, "позиций прямо сейчас"],
+    ["В наблюдении", (state.watchlist || []).length, "монет прошло фильтр отбора"],
+  ];
+  document.getElementById("cards").innerHTML = cards
+    .map(([k, v, h]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="h">${esc(h)}</div></div>`)
+    .join("");
+}
+
+// ---- кривая накопленного результата ----------------------------------------
+
+function renderCurve(trades) {
+  const box = document.getElementById("curve");
+  const note = document.getElementById("curveNote");
+  if (trades.length < 2) {
+    box.innerHTML = '<div class="empty" style="padding:16px 0">нужно хотя бы две закрытые сделки</div>';
+    note.textContent = "";
+    return;
+  }
+  // В API свежие сверху — для графика разворачиваем в хронологический порядок.
+  const pts = [];
+  let acc = 0;
+  for (const t of [...trades].reverse()) { acc += n(t.profit_usd); pts.push(acc); }
+
+  const W = 1000, H = 160, PAD = 8;
+  const lo = Math.min(0, ...pts), hi = Math.max(0, ...pts);
+  const span = (hi - lo) || 1;
+  const x = i => PAD + (i * (W - 2 * PAD)) / (pts.length - 1);
+  const y = v => H - PAD - ((v - lo) * (H - 2 * PAD)) / span;
+  const line = pts.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const last = pts[pts.length - 1];
+  const color = last >= 0 ? "var(--green)" : "var(--red)";
+
+  box.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+         aria-label="Накопленный результат: ${last.toFixed(2)} долларов за ${pts.length} сделок">
+      <line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="var(--line)" stroke-width="1"/>
+      <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2"
+                vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+      <circle cx="${x(pts.length - 1)}" cy="${y(last)}" r="3" fill="${color}"/>
+    </svg>`;
+  note.innerHTML = `итог <span class="${cls(last)}">${money(last)}$</span> ·
+     максимум ${money(hi)}$ · минимум ${money(lo)}$ · сделок ${pts.length}`;
+}
+
+// ---- открытые позиции ------------------------------------------------------
+
+function renderOpen(state) {
+  const rows = state.open_positions || [];
+  document.getElementById("openCount").textContent = rows.length ? rows.length + " шт." : "";
+  document.getElementById("open").innerHTML = table(
+    ["Монета", "ТФ", "Открыта", { label: "Вход", num: 1 }, { label: "Сейчас", num: 1 },
+     { label: "Стоп", num: 1 }, { label: "Тейк", num: 1 }, "Стоп ← → тейк",
+     { label: "Лучший PnL, $", num: 1 }, { label: "Мин", num: 1 }],
+    rows,
+    p => {
+      // Где сейчас цена между стопом и тейком. Позиции короткие, поэтому
+      // стоп выше входа, а тейк ниже — берём min/max, чтобы шкала работала
+      // одинаково для обеих сторон.
+      const lo = Math.min(n(p.stop_price), n(p.take_price));
+      const hi = Math.max(n(p.stop_price), n(p.take_price));
+      const frac = hi > lo ? Math.min(1, Math.max(0, (n(p.last_price) - lo) / (hi - lo))) : 0.5;
+      // Слева на шкале — то, что ближе к стопу (плохо), справа — к тейку.
+      const pos = n(p.take_price) < n(p.stop_price) ? 1 - frac : frac;
+      return `<tr>
+        <td class="sym">${esc(p.symbol)}</td>
+        <td><span class="tag">${esc(p.timeframe)}м</span></td>
+        <td class="muted">${esc(p.opened)}</td>
+        <td class="num">${price(p.entry_price)}</td>
+        <td class="num">${price(p.last_price)}</td>
+        <td class="num neg">${price(p.stop_price)}</td>
+        <td class="num pos">${price(p.take_price)}</td>
+        <td><div class="rail"><i style="left:${(pos * 100).toFixed(1)}%"></i></div></td>
+        <td class="num ${cls(p.best_pnl_usd)}">${money(p.best_pnl_usd)}</td>
+        <td class="num muted">${esc(p.age_min)}</td>
+      </tr>`;
+    });
+}
+
+// ---- сделки ----------------------------------------------------------------
+
+let sort = { key: "num", desc: true };
+let allTrades = [];
+
+function visibleTrades() {
+  const q = document.getElementById("q").value.trim().toUpperCase();
+  const f = document.getElementById("filter").value;
+  let rows = allTrades.filter(t => {
+    if (q && !String(t.symbol || "").toUpperCase().includes(q)) return false;
+    if (f === "win" && n(t.profit_usd) < 0) return false;
+    if (f === "loss" && n(t.profit_usd) >= 0) return false;
+    return true;
+  });
+  const k = sort.key;
+  if (k) {
+    const numeric = ["num", "profit_usd", "profit_pct_margin", "duration_min", "entry_price", "exit_price"].includes(k);
+    rows = [...rows].sort((a, b) => {
+      const va = numeric ? n(a[k]) : String(a[k] ?? "");
+      const vb = numeric ? n(b[k]) : String(b[k] ?? "");
+      const c = numeric ? va - vb : va.localeCompare(vb);
+      return sort.desc ? -c : c;
+    });
+  }
+  return rows;
+}
+
+function renderTrades() {
+  const rows = visibleTrades();
+  const sum = rows.reduce((a, t) => a + n(t.profit_usd), 0);
+  document.getElementById("tradeCount").innerHTML = allTrades.length
+    ? `показано ${rows.length} из ${allTrades.length} · итог по выборке <span class="${cls(sum)}">${money(sum)}$</span>`
+    : "";
+
+  document.getElementById("trades").innerHTML = table(
+    [{ label: "#", key: "num", num: 1 }, { label: "Монета", key: "symbol" }, "Сторона", "ТФ",
+     { label: "Вход", key: "open_time" }, "Выход",
+     { label: "Цена входа", key: "entry_price", num: 1 }, { label: "Цена выхода", key: "exit_price", num: 1 },
+     { label: "Профит, $", key: "profit_usd", num: 1 }, { label: "% к марже", key: "profit_pct_margin", num: 1 },
+     { label: "Мин", key: "duration_min", num: 1 }, "Почему закрылась"],
+    rows,
+    t => {
+      const side = String(t.side || "").toLowerCase();
+      return `<tr>
+        <td class="muted">${esc(t.num)}</td>
+        <td class="sym">${esc(t.symbol)}</td>
+        <td><span class="tag ${side.includes("sell") || side.includes("short") ? "short" : "long"}">${esc(t.side)}</span></td>
+        <td><span class="tag">${esc(t.timeframe)}м</span></td>
+        <td class="muted">${esc(t.open_time)}</td>
+        <td class="muted">${esc(t.close_time)}</td>
+        <td class="num">${price(t.entry_price)}</td>
+        <td class="num">${price(t.exit_price)}</td>
+        ${money_cell(t.profit_usd)}
+        <td class="num ${cls(t.profit_pct_margin)}">${money(t.profit_pct_margin, 1)}%</td>
+        <td class="num muted">${esc(t.duration_min)}</td>
+        <td class="wrap">${esc(t.exit_reason)}</td>
+      </tr>`;
+    });
+}
+
+// Сортировка по клику на заголовок: перерисовываем только таблицу сделок,
+// автообновление её потом не сбросит — состояние живёт в sort.
+document.getElementById("trades").addEventListener("click", e => {
+  const th = e.target.closest("th[data-key]");
+  if (!th) return;
+  const key = th.dataset.key;
+  sort = { key, desc: sort.key === key ? !sort.desc : true };
+  renderTrades();
+});
+document.getElementById("q").addEventListener("input", renderTrades);
+document.getElementById("filter").addEventListener("change", renderTrades);
+
+// ---- сигналы ---------------------------------------------------------------
+
+function renderSignals(rows) {
+  document.getElementById("sigCount").textContent = rows.length ? rows.length + " шт." : "";
+  document.getElementById("signals").innerHTML = table(
+    ["Время", "Монета", { label: "Цена", num: 1 }, "ТФ", { label: "Оценка", num: 1 }, "Решение",
+     { label: "Сутки, %", num: 1 }, { label: "Оборот, $", num: 1 }, "Заметки"],
+    rows,
+    s => `<tr>
+      <td class="muted">${esc(s.time)}</td>
+      <td class="sym">${esc(s.symbol)}</td>
+      <td class="num">${price(s.price)}</td>
+      <td><span class="tag">${esc(s.timeframe)}м</span></td>
+      <td class="num">${esc(s.score)}</td>
+      <td><span class="tag">${esc(s.action)}</span></td>
+      <td class="num ${cls(s.change_24h_pct)}">${money(s.change_24h_pct, 1)}</td>
+      <td class="num muted">${n(s.turnover_24h_usd).toLocaleString("ru-RU", { maximumFractionDigits: 0 })}</td>
+      <td class="wrap">${esc(s.notes)}</td>
+    </tr>`);
+}
+
+// ---- статус и цикл обновления ----------------------------------------------
+
+function setStatus(kind, text) {
+  document.getElementById("status").innerHTML = `<span class="dot ${kind}"></span>${esc(text)}`;
+}
+
+let lastUpdated = "";
+let lastUpdatedSeen = Date.now();
+
+function showError(msg) {
+  const b = document.getElementById("banner");
+  b.textContent = msg;
+  b.classList.add("show");
+}
+
+async function refresh() {
+  let state, trades, signals, log;
+  try {
+    [state, trades, signals, log] = await Promise.all([
+      get("/state"), get("/trades?limit=2000"), get("/signals?limit=200"), get("/log?lines=200"),
+    ]);
+  } catch (err) {
+    setStatus("down", "бот недоступен");
+    showError("Не удалось получить данные бота (" + err.message + "). " +
+              "Похоже, под tradingbot не запущен — данные ниже могли устареть.");
+    return;
+  }
+  document.getElementById("banner").classList.remove("show");
+
+  // state.json бот перезаписывает раз в 60 секунд. Если отметка перестала
+  // меняться — процесс жив (иначе не ответил бы), но торговый цикл встал.
+  //
+  // Сравниваем отметку саму с собой, а не с часами браузера: время в state.json
+  // записано в TZ бота (Europe/Moscow), и у зрителя из другого пояса разница
+  // часов читалась бы как «бот молчит».
+  const updated = state.updated || "";
+  if (!updated) {
+    setStatus("stale", "данных ещё нет");
+  } else {
+    if (updated !== lastUpdated) { lastUpdated = updated; lastUpdatedSeen = Date.now(); }
+    const silentSec = (Date.now() - lastUpdatedSeen) / 1000;
+    if (silentSec > 180) setStatus("stale", `бот молчит с ${updated}`);
+    else setStatus("ok", `обновлено ${updated}`);
+  }
+
+  allTrades = Array.isArray(trades) ? trades : [];
+  renderCards(state, allTrades);
+  renderCurve(allTrades);
+  renderOpen(state);
+  renderTrades();
+  renderSignals(Array.isArray(signals) ? signals : []);
+
+  const watch = state.watchlist || [];
+  document.getElementById("watchCount").textContent = watch.length ? watch.length + " шт." : "";
+  document.getElementById("watch").innerHTML = watch.length
+    ? watch.map(w => `<span class="tag" style="margin:2px 4px 2px 0">${esc(w)}</span>`).join("")
+    : '<span class="muted">пусто — ни одна монета не прошла фильтр отбора</span>';
+
+  const pre = document.getElementById("log");
+  // Хвост лога держим прижатым к низу, если пользователь его не отматывал.
+  const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24;
+  pre.textContent = (log || []).join("\n");
+  if (stick) pre.scrollTop = pre.scrollHeight;
+}
+
+let timer = setInterval(refresh, REFRESH_MS);
+const pauseBtn = document.getElementById("pause");
+pauseBtn.addEventListener("click", () => {
+  if (timer) { clearInterval(timer); timer = null; pauseBtn.textContent = "▶ продолжить"; pauseBtn.classList.add("on"); }
+  else { timer = setInterval(refresh, REFRESH_MS); pauseBtn.textContent = "⏸ пауза"; pauseBtn.classList.remove("on"); refresh(); }
+});
+
+refresh();
+</script>
+</body>
+</html>

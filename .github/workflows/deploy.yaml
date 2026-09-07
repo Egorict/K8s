@@ -31,6 +31,8 @@ env:
   SERVER_VALUES_FILE: infrastructure/k8s/base/server-chart/values.yaml
   CLIENT_IMAGE_NAME: ermakov880/devops-project
   CLIENT_VALUES_FILE: infrastructure/k8s/base/myapp-chart/values.yaml
+  BOT_IMAGE_NAME: ermakov880/devops-project-tradingbot
+  BOT_VALUES_FILE: infrastructure/k8s/base/tradingbot-chart/values.yaml
 
 jobs:
   # 0. Что именно изменилось. Клиент и сервер разделены: правка сервера больше
@@ -41,6 +43,7 @@ jobs:
       infra: ${{ steps.filter.outputs.infra }}
       server: ${{ steps.filter.outputs.server }}
       client: ${{ steps.filter.outputs.client }}
+      bot: ${{ steps.filter.outputs.bot }}
       charts: ${{ steps.filter.outputs.charts }}
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +57,8 @@ jobs:
               - 'apps/server/**'
             client:
               - 'apps/client/**'
+            bot:
+              - 'apps/tradingbot/**'
             charts:
               - 'infrastructure/k8s/**'
 
@@ -87,6 +92,23 @@ jobs:
         if: needs.changes.outputs.server == 'true'
         working-directory: apps/server
         run: for f in src/*.js; do node --check "$f"; done
+
+      - uses: actions/setup-python@v5
+        if: needs.changes.outputs.bot == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install bot dependencies
+        if: needs.changes.outputs.bot == 'true'
+        working-directory: apps/tradingbot
+        run: pip install -r requirements.txt
+
+      # selftest гоняет стратегию на синтетических свечах и в сеть не ходит —
+      # ловит поломку логики до того, как образ уедет в кластер.
+      - name: Self-test trading strategy
+        if: needs.changes.outputs.bot == 'true'
+        working-directory: apps/tradingbot
+        run: python run.py selftest
 
       - name: Set up Helm
         if: needs.changes.outputs.charts == 'true'
@@ -151,7 +173,9 @@ jobs:
   #    release ниже, чтобы у стороннего кода не было доступа к git-токену.
   build:
     needs: [changes, lint-and-test]
-    if: needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true'
+    if: >-
+      needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true' ||
+      needs.changes.outputs.bot == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -194,6 +218,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build tradingbot image
+        if: needs.changes.outputs.bot == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/tradingbot
+          pull: true
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ env.BOT_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       # Скан на уязвимости ПОСЛЕ сборки, но до обновления тегов в git:
       # уязвимый образ не должен доехать до кластера.
       #
@@ -223,6 +259,16 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
 
+      - name: Scan tradingbot image
+        if: needs.changes.outputs.bot == 'true'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.BOT_IMAGE_NAME }}:${{ github.sha }}
+          severity: 'CRITICAL,HIGH'
+          trivyignores: '.trivyignore.yaml'
+          exit-code: '1'
+          ignore-unfixed: true
+
   # 4. Обновление тегов в git. Отдельная джоба — единственная с правом записи.
   #    Здесь НЕ выполняется ни одного стороннего action, кроме официального
   #    checkout: так угон стороннего сканера не даёт доступа к git-токену.
@@ -230,7 +276,8 @@ jobs:
     needs: [changes, lint-and-test, build]
     if: >-
       github.event_name == 'push' &&
-      (needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true')
+      (needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true' ||
+       needs.changes.outputs.bot == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -261,6 +308,9 @@ jobs:
           if [ "${{ needs.changes.outputs.client }}" = "true" ]; then
             yq -i '.image.tag = "${{ github.sha }}"' "${{ env.CLIENT_VALUES_FILE }}"
           fi
+          if [ "${{ needs.changes.outputs.bot }}" = "true" ]; then
+            yq -i '.image.tag = "${{ github.sha }}"' "${{ env.BOT_VALUES_FILE }}"
+          fi
           git diff --stat
 
       # Пуш с ретраем и rebase: если параллельный коммит успел прилететь,
@@ -269,7 +319,7 @@ jobs:
         run: |
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git add "${{ env.SERVER_VALUES_FILE }}" "${{ env.CLIENT_VALUES_FILE }}"
+          git add "${{ env.SERVER_VALUES_FILE }}" "${{ env.CLIENT_VALUES_FILE }}" "${{ env.BOT_VALUES_FILE }}"
           if git diff --staged --quiet; then
             echo "Теги не изменились — коммитить нечего"
             exit 0
