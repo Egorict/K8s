@@ -7,7 +7,7 @@ image:
   # CI заменит её на SHA коммита. Руками сюда писать тег не нужно; если в поде
   # ImagePullBackOff на теге bootstrap — значит сборка образа не запускалась,
   # смотри фильтр "bot" в .github/workflows/deploy.yaml.
-  tag: bootstrap
+  tag: 15ac88681b53846edba5aea852712b798495349b
   pullPolicy: IfNotPresent
 
 # Боты. Один под = одна торговая система = свой том с журналом, поэтому
