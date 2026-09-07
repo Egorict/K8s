@@ -2,19 +2,21 @@ image:
   repository: ermakov880/devops-project-tradingbot
   # Тег проставляет CI (шаг "Update image tags") — неизменяемый git SHA,
   # поэтому pullPolicy: IfNotPresent, как и у остальных чартов.
-  tag: latest
+  #
+  # Значение ниже — заглушка, живущая ровно до конца сборки: в том же прогоне
+  # CI заменит её на SHA коммита. Руками сюда писать тег не нужно; если в поде
+  # ImagePullBackOff на теге bootstrap — значит сборка образа не запускалась,
+  # смотри фильтр "bot" в .github/workflows/deploy.yaml.
+  tag: bootstrap
   pullPolicy: IfNotPresent
-
 # Строго 1: две реплики торговали бы одну стратегию в один и тот же файл,
 # а PVC у нас ReadWriteOnce — второму поду том всё равно не отдадут.
 replicaCount: 1
-
 service:
   # ClusterIP: снаружи бот не доступен. Страница /tb живёт в nginx клиента,
   # он же проксирует на /tb/api/ — то же решение, что и для server-app.
   type: ClusterIP
   port: 8080
-
 # Журналы и сделки на отдельном томе: перезапуск пода не должен стирать
 # историю сделок. Тот же longhorn, что и у архива скриншотов.
 data:
@@ -22,13 +24,11 @@ data:
   size: 2Gi
   storageClass: longhorn
   mountPath: /data
-
 # Параметры торговой стратегии. Всё, что не задано здесь, берётся из bot/config.py.
 bot:
   timezone: Europe/Moscow
   # Аргументы run.py — маржа, плечо, стоп, тейк меняются без пересборки образа.
   args: ["run", "--web"]
-
 resources:
   requests:
     cpu: 100m
@@ -36,7 +36,6 @@ resources:
   limits:
     cpu: 300m
     memory: 256Mi
-
 # Биржа. Единственное исходящее соединение бота наружу кластера.
 exchange:
   port: 443
