@@ -9,6 +9,16 @@ on:
     branches: [ master, main ]
   workflow_dispatch:
     inputs:
+      # Аварийный выход из ситуации "код в master есть, а образа нет".
+      # Фильтр путей сравнивает пуш с ПРЕДЫДУЩИМ коммитом, поэтому если прогон
+      # упал на гейтах (как 07.09.2026 на values.yaml с маркерами конфликта),
+      # изменения того коммита больше никогда не попадут в сборку: следующий
+      # пуш трогает уже другие пути. Этот флаг пересобирает всё независимо от
+      # диффа и заново проставляет теги.
+      force_build:
+        description: "Rebuild and redeploy ALL images regardless of changed paths"
+        type: boolean
+        default: false
       longhorn_force_reset:
         description: "Force full Longhorn reinstall (destructive! wipes existing volumes)"
         type: boolean
@@ -41,9 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       infra: ${{ steps.filter.outputs.infra }}
-      server: ${{ steps.filter.outputs.server }}
-      client: ${{ steps.filter.outputs.client }}
-      bot: ${{ steps.filter.outputs.bot }}
+      # force_build поднимает флаг всем трём образам: см. комментарий у input.
+      server: ${{ steps.filter.outputs.server == 'true' || inputs.force_build }}
+      client: ${{ steps.filter.outputs.client == 'true' || inputs.force_build }}
+      bot: ${{ steps.filter.outputs.bot == 'true' || inputs.force_build }}
       charts: ${{ steps.filter.outputs.charts }}
     steps:
       - uses: actions/checkout@v4
@@ -146,12 +157,18 @@ jobs:
           done
 
   # 2. Инфраструктура кластера (Ansible). Только при изменениях в ролях
-  #    или по ручному запуску. На PR не выполняется.
+  #    или по явному запросу. На PR не выполняется.
+  #
+  #    Раньше здесь стояло "любой workflow_dispatch", но теперь через dispatch
+  #    ходят и за пересборкой образов (force_build). Гонять из-за этого весь
+  #    плейбук с helm upgrade Longhorn на живом кластере с примонтированными
+  #    томами - слишком дорогой побочный эффект, поэтому нужен явный флаг.
   infra:
     needs: [changes, lint-and-test]
     if: >-
       github.event_name != 'pull_request' &&
-      (needs.changes.outputs.infra == 'true' || github.event_name == 'workflow_dispatch')
+      (needs.changes.outputs.infra == 'true' ||
+       inputs.longhorn_force_reset || inputs.argocd_force_reset)
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
@@ -287,8 +304,10 @@ jobs:
   #    checkout: так угон стороннего сканера не даёт доступа к git-токену.
   release:
     needs: [changes, lint-and-test, build]
+    # Ручной прогон с force_build тоже должен допроставить теги: иначе образы
+    # соберутся, а кластер продолжит тянуть старые.
     if: >-
-      github.event_name == 'push' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       (needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true' ||
        needs.changes.outputs.bot == 'true')
     runs-on: ubuntu-latest

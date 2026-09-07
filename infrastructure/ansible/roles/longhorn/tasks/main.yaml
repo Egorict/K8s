@@ -86,7 +86,7 @@
     values:
       persistence:
         defaultClass: true
-        # | int обязателен: без него сюда уходит строка "1", а чарт ждёт число.
+        # | int обязателен: без него сюда уходит строка "1", а чарт ждёт число. 
         defaultClassReplicaCount: "{{ longhorn_replica_count | int }}"
       defaultSettings:
         storageReservedPercentageForDefaultDisk: "{{ longhorn_storage_reserved_percentage | int }}"
