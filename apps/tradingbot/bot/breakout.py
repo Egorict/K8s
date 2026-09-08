@@ -222,7 +222,7 @@ class BreakoutEngine:
     def __init__(self, cfg: Config, client: BybitPublic):
         self.cfg = cfg
         self.client = client
-        self.scanner = TrendScanner(client, cfg)
+        self.scanner = self.make_scanner()
         self.broker = PaperBroker(cfg)
         self.journal = Journal(cfg.trades_csv, cfg.signals_csv, cfg.state_json)
 
@@ -233,6 +233,29 @@ class BreakoutEngine:
         self._entry_levels: Dict[str, float] = {}        # уровень открытой сделки
         self._last: Dict[str, ActivitySnapshot] = {}     # последний замер, для панели
         self._running = True
+
+    # --- точки расширения для следующих версий ТС -------------------------
+    #
+    # Версия 0.2 (bot/breakout_v2.py) переопределяет отбор монет, выбор уровня
+    # и условия входа, не трогая циклы и ведение позиции. Логика самой 0.1
+    # живёт в модульных функциях ниже и остаётся неизменной.
+
+    def make_scanner(self) -> TrendScanner:
+        return TrendScanner(self.client, self.cfg)
+
+    def candles_limit(self) -> int:
+        """Сколько свечей качать под расчёт уровней."""
+        return self.cfg.breakout.lookback_candles + 5
+
+    def pick_level_for(self, candles: List[Candle], price: float) -> Optional[HorizontalLevel]:
+        return pick_level(candles, price, self.cfg)
+
+    def in_entry_zone(self, price: float, level: HorizontalLevel) -> bool:
+        return in_zone(price, level, self.cfg)
+
+    def make_setup(self, ticker: Ticker, level: HorizontalLevel,
+                   snapshot: ActivitySnapshot, ratio: float) -> Optional[PlainSetup]:
+        return build_setup(ticker, level, snapshot, ratio, self.cfg)
 
     def tracker(self, symbol: str) -> ActivityTracker:
         if symbol not in self.trackers:
@@ -263,10 +286,10 @@ class BreakoutEngine:
         if not allowed:
             return
         ticker = await self.client.ticker(symbol)
-        if ticker is None or not in_zone(ticker.last_price, level, self.cfg):
+        if ticker is None or not self.in_entry_zone(ticker.last_price, level):
             return
 
-        setup = build_setup(ticker, level, snapshot, ratio, self.cfg)
+        setup = self.make_setup(ticker, level, snapshot, ratio)
         if setup is None:
             return
 
@@ -364,16 +387,15 @@ class BreakoutEngine:
                     break
                 try:
                     candles = await self.client.klines(
-                        symbol, self.cfg.breakout.timeframe,
-                        limit=self.cfg.breakout.lookback_candles + 5)
+                        symbol, self.cfg.breakout.timeframe, limit=self.candles_limit())
                     fresh = await self.client.ticker(symbol)
                     price = fresh.last_price if fresh else ticker.last_price
-                    level = pick_level(candles, price, self.cfg)
+                    level = self.pick_level_for(candles, price)
                     if level is None:
                         self.levels.pop(symbol, None)
                         continue
                     self.levels[symbol] = level
-                    if in_zone(price, level, self.cfg) or symbol in self.broker.positions:
+                    if self.in_entry_zone(price, level) or symbol in self.broker.positions:
                         hot[symbol] = level
                 except Exception as exc:  # noqa: BLE001
                     log.debug("[%s] ошибка расчёта уровня: %s", symbol, exc)

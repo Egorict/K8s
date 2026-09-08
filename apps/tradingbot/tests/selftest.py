@@ -13,7 +13,8 @@ from bot.config import Config
 from bot.models import Candle, Level, PlainSetup, Ticker, TradePrint
 from bot.orderbook import BookTracker
 from bot.paper import PaperBroker
-from bot.strategy import build_setup, find_impulse, find_stall
+from bot.breakout import build_setup, in_zone
+from bot.strategy import build_setup as build_impulse_setup, find_impulse, find_stall
 
 
 def _candles(flat: int, impulse: int, stall: int, start: float = 1.0) -> List[Candle]:
@@ -101,7 +102,7 @@ def run_selftest(cfg: Config) -> None:
     ticker = Ticker(symbol="TESTUSDT", last_price=candles[-1].close, change_24h=0.25,
                     turnover_24h=20_000_000, volume_24h=1_000_000)
     candles_by_tf = {"1": candles, "5": candles, "15": candles}
-    setup = build_setup("TESTUSDT", ticker, candles_by_tf, view, cfg)
+    setup = build_impulse_setup("TESTUSDT", ticker, candles_by_tf, view, cfg)
     results.append(_check("сетап собран целиком", setup is not None,
                           f"скор {setup.score:.2f}" if setup else "сетапа нет"))
 
@@ -146,6 +147,9 @@ def run_selftest(cfg: Config) -> None:
 
     # --- 10. Реестр версий ---------------------------------------------------
     results.extend(run_versions_selftest(cfg))
+
+    # --- 11. ТС пробоя, версия 0.2 -------------------------------------------
+    results.extend(run_breakout_v2_selftest(cfg))
 
     passed = sum(1 for r in results if r)
     print(f"\nИтог: {passed}/{len(results)} проверок пройдено")
@@ -794,4 +798,169 @@ def run_versions_selftest(cfg: Config) -> List[bool]:
     finally:
         cfg.data_dir = original_dir
 
+    return results
+
+
+def _passed_level_candles(level: float = 100.0) -> List[Candle]:
+    """Уровень ПРОБИТ давно, а цена вернулась к нему СВЕРХУ.
+
+    Ровно тот случай, на который жалоба: пробивать уже нечего — цена выше
+    уровня и торгуется там давно, — но 0.1 видит «цену в зоне уровня» и
+    считает это сетапом пробоя. Для 0.2 такой уровень позади, а не впереди.
+    """
+    out: List[Candle] = []
+    ts = int(time.time() * 1000) - 140 * 900_000
+    price = level * 0.96
+
+    # Фаза 1: уровень формируется — цена подходит снизу и отбивается.
+    for _ in range(3):
+        for _ in range(6):
+            o = price
+            c = min(price * 1.005, level * 0.996)
+            out.append(Candle(ts, o, max(o, c) * 1.0008, min(o, c) * 0.999, c, 1000.0))
+            price, ts = c, ts + 900_000
+        o = price
+        c = level * 0.994
+        out.append(Candle(ts, o, level, min(o, c) * 0.999, c, 1400.0))   # касание
+        price, ts = c, ts + 900_000
+        for _ in range(6):
+            o = price
+            c = price * 0.995
+            out.append(Candle(ts, o, max(o, c) * 1.0008, min(o, c) * 0.999, c, 900.0))
+            price, ts = c, ts + 900_000
+
+    # Фаза 2: уровень пробит, цена ушла выше и долго там торговалась.
+    # Держим её примерно на 1% выше, чтобы её собственные экстремумы не
+    # склеились с уровнем (tolerance 0.4%).
+    for i in range(30):
+        base = level * (1.010 if i % 2 == 0 else 1.009)
+        out.append(Candle(ts, base, base * 1.0008, base * 0.9992, base, 1000.0))
+        ts += 900_000
+
+    # Фаза 3: цена вернулась к уровню СВЕРХУ и стоит в 0.3% над ним —
+    # для 0.1 это «зона уровня».
+    for i in range(4):
+        base = level * (1.003 if i % 2 == 0 else 1.0028)
+        out.append(Candle(ts, base, base * 1.0006, base * 0.9995, base, 1100.0))
+        ts += 900_000
+    return out
+
+
+def _weak_trend_candles(n: int = 90, start: float = 100.0) -> List[Candle]:
+    """Боковик с еле заметным подъёмом: 0.1 такой тренд принимала, 0.2 — нет."""
+    out: List[Candle] = []
+    ts = int(time.time() * 1000) - n * 900_000
+    price = start
+    for i in range(n):
+        o = price
+        # Пила с крошечным сносом вверх: наклон средней околонулевой.
+        c = price * (1.0020 if i % 2 == 0 else 0.9982)
+        out.append(Candle(ts, o, max(o, c) * 1.001, min(o, c) * 0.999, c, 1000.0))
+        price, ts = c, ts + 900_000
+    return out
+
+
+def run_breakout_v2_selftest(cfg: Config) -> List[bool]:
+    """Версия 0.2: уровень только на пробой, тренд строже, касаний три."""
+    import tempfile
+
+    from bot.activity import measure
+    from bot.breakout import pick_level  # для сравнения с 0.1
+    from bot.breakout_v2 import (BreakoutV2Engine, TrendScannerV2, build_setup_v2,
+                                 in_breakout_zone, level_ahead)
+
+    print("\nТС пробоя, версия 0.2")
+    results: List[bool] = []
+    b, v2 = cfg.breakout, cfg.breakout_v2
+    level_price = 100.0
+
+    # --- уровень позади цены: главная жалоба ---------------------------------
+    passed = _passed_level_candles(level_price)
+    price_now = passed[-1].close
+    old_pick = pick_level(passed, price_now, cfg)
+    new_pick = level_ahead(passed, price_now, cfg)
+    results.append(_check("0.1 брала уже пройденный уровень (воспроизводим жалобу)",
+                          old_pick is not None,
+                          old_pick.describe() if old_pick else "нет"))
+    results.append(_check("0.2 пройденный уровень НЕ берёт", new_pick is None,
+                          new_pick.describe() if new_pick else "отсеян"))
+
+    # --- уровень впереди: его 0.2 берёт --------------------------------------
+    # Касаний больше, чем в тесте 0.1: горизонт 0.2 длиннее (400 свечей против
+    # 120), и на короткой серии она справедливо отказывается искать уровни.
+    ahead = _level_candles(touches=10)
+    # Цена ещё под уровнем — классический сетап «на пробой».
+    ahead_price = level_price * 0.997
+    picked = level_ahead(ahead, ahead_price, cfg)
+    results.append(_check("0.2 берёт уровень, к которому цена идёт снизу",
+                          picked is not None,
+                          picked.describe() if picked else "нет"))
+    if picked is None:
+        return results
+
+    results.append(_check("касаний не меньше трёх", picked.touches >= v2.min_touches,
+                          str(picked.touches)))
+
+    # --- асимметричная зона --------------------------------------------------
+    results.append(_check("вход разрешён под уровнем (ждём пробой)",
+                          in_breakout_zone(picked.price * 0.997, picked, cfg)))
+    results.append(_check("вход разрешён сразу над уровнем (свежий пробой)",
+                          in_breakout_zone(picked.price * 1.001, picked, cfg)))
+    results.append(_check("вход запрещён, когда цена уже ушла выше",
+                          not in_breakout_zone(picked.price * 1.005, picked, cfg)))
+    # У 0.1 та же точка входом считалась — показываем разницу версий.
+    results.append(_check("у 0.1 та же точка входом считалась (разница версий видна)",
+                          in_zone(picked.price * 1.003, picked, cfg)
+                          and not in_breakout_zone(picked.price * 1.003, picked, cfg)))
+
+    # --- тренд ---------------------------------------------------------------
+    scanner = TrendScannerV2(client=None, cfg=cfg)
+    ok_strong, why_strong = scanner._uptrend(_trend_candles(up=True))
+    results.append(_check("сильный тренд проходит", ok_strong, why_strong))
+    ok_weak, why_weak = scanner._uptrend(_weak_trend_candles())
+    results.append(_check("вялый тренд 0.2 отсеивает", not ok_weak, why_weak))
+
+    weak_ticker = Ticker(symbol="TESTUSDT", last_price=100.0, change_24h=0.025,
+                         turnover_24h=50_000_000, volume_24h=1_000_000)
+    info = {"status": "Trading", "quote": "USDT", "base": "TEST"}
+    results.append(_check("рост за сутки ниже порога 0.2 отсеивается",
+                          not scanner._tradable(weak_ticker, info),
+                          f"{weak_ticker.change_24h * 100:.0f}% < {v2.min_change_24h * 100:.0f}%"))
+
+    # --- активность ----------------------------------------------------------
+    bids = [Level(picked.price * (1 - 0.0005 * i), 60.0) for i in range(1, 12)]
+    asks = [Level(picked.price * (1 + 0.0005 * i), 60.0) for i in range(1, 12)]
+    live = measure(_prints(400, picked.price, span_sec=60), bids, asks, picked.price, b)
+    ticker = Ticker(symbol="TESTUSDT", last_price=picked.price * 0.998, change_24h=0.12,
+                    turnover_24h=50_000_000, volume_24h=1_000_000)
+
+    setup = build_setup_v2(ticker, picked, live, ratio=2.5, cfg=cfg)
+    results.append(_check("сетап 0.2 собран на живой активности", setup is not None,
+                          f"скор {setup.score:.2f}" if setup else "нет"))
+
+    # Вялая по себе монета: у уровня всплеск есть, но сама монета мертва.
+    sleepy = measure(_prints(60, picked.price, span_sec=60), bids, asks, picked.price, b)
+    results.append(_check("вялая монета не проходит порог активности 0.2",
+                          build_setup_v2(ticker, picked, sleepy, ratio=3.0, cfg=cfg) is None,
+                          f"{sleepy.trades_per_min:.0f} принтов/мин"))
+    results.append(_check("но у 0.1 та же монета входом считалась",
+                          build_setup(ticker, picked, sleepy, ratio=3.0, cfg=cfg) is not None))
+
+    results.append(_check("без превышения фона 0.2 не входит",
+                          build_setup_v2(ticker, picked, live, ratio=1.5, cfg=cfg) is None))
+
+    # --- движок --------------------------------------------------------------
+    original_dir = cfg.data_dir
+    cfg.data_dir = tempfile.mkdtemp(prefix="selftest-breakout-v2-")
+    try:
+        engine = BreakoutV2Engine(cfg, client=None)
+        results.append(_check("движок 0.2 использует свой сканер",
+                              type(engine.scanner).__name__ == "TrendScannerV2",
+                              type(engine.scanner).__name__))
+        results.append(_check("движок 0.2 использует свой отбор уровня",
+                              engine.pick_level_for(passed, price_now) is None))
+        results.append(_check("правило выхода унаследовано от 0.1",
+                              hasattr(engine, "_exit_reason")))
+    finally:
+        cfg.data_dir = original_dir
     return results
