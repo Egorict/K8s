@@ -48,6 +48,11 @@ bots:
     version: "0.1"
     args: ["run", "--web", "--strategy", "density", "--version", "0.1"]
     storage: 2Gi
+  - name: density-v0-2
+    strategy: density
+    version: "0.2"
+    args: ["run", "--web", "--strategy", "density", "--version", "0.2"]
+    storage: 2Gi
   - name: breakout-v0-1
     strategy: breakout
     version: "0.1"

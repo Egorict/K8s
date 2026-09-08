@@ -151,6 +151,9 @@ def run_selftest(cfg: Config) -> None:
     # --- 11. ТС пробоя, версия 0.2 -------------------------------------------
     results.extend(run_breakout_v2_selftest(cfg))
 
+    # --- 12. ТС плотностей, версия 0.2 ---------------------------------------
+    results.extend(run_density_v2_selftest(cfg))
+
     passed = sum(1 for r in results if r)
     print(f"\nИтог: {passed}/{len(results)} проверок пройдено")
     if passed != len(results):
@@ -158,18 +161,21 @@ def run_selftest(cfg: Config) -> None:
 
 
 def _book_snapshot(wall_index: int = 6, wall_mult: float = 24.0, with_wall: bool = True,
-                   wall_shrink: float = 1.0) -> tuple:
-    """Стакан вокруг 100$: ровные уровни плюс одна плотность на стороне bid.
+                   wall_shrink: float = 1.0, wall_side: str = "bid") -> tuple:
+    """Стакан вокруг 100$: ровные уровни плюс одна плотность.
 
+    wall_side - на какой стороне стоит плотность (нужно версии 0.2, которая
+    торгует те же стены в обратную сторону);
     wall_shrink=0.1 - от плотности осталось 10% (её едят);
     with_wall=False - уровень исчез из стакана совсем (заявку сняли).
     """
     bids = [Level(100.0 - i * 0.05, 100.0) for i in range(20)]
     asks = [Level(100.05 + i * 0.05, 100.0) for i in range(20)]
+    book = bids if wall_side == "bid" else asks
     if with_wall:
-        bids[wall_index] = Level(bids[wall_index].price, 100.0 * wall_mult * wall_shrink)
+        book[wall_index] = Level(book[wall_index].price, 100.0 * wall_mult * wall_shrink)
     else:
-        del bids[wall_index]
+        del book[wall_index]
     return bids, asks
 
 
@@ -961,6 +967,165 @@ def run_breakout_v2_selftest(cfg: Config) -> List[bool]:
                               engine.pick_level_for(passed, price_now) is None))
         results.append(_check("правило выхода унаследовано от 0.1",
                               hasattr(engine, "_exit_reason")))
+    finally:
+        cfg.data_dir = original_dir
+    return results
+
+
+def _density_view(cfg: Config, wall_side: str = "bid"):
+    """Стакан с одной настоящей плотностью — общий вход для обеих версий."""
+    import dataclasses
+
+    from bot.orderbook import BookTracker
+
+    d = cfg.density
+    ocfg = dataclasses.replace(cfg.orderbook,
+                               density_multiplier=d.density_multiplier,
+                               min_persist_snapshots=d.min_persist_snapshots,
+                               shrink_tolerance=d.max_shrink,
+                               poll_interval_sec=d.poll_interval_sec)
+    tracker = BookTracker(cfg=ocfg, symbol="TESTUSDT")
+    view = None
+    for _ in range(d.min_persist_snapshots + 2):
+        view = tracker.update(*_book_snapshot(wall_side=wall_side))
+    return tracker, view
+
+
+def run_density_v2_selftest(cfg: Config) -> List[bool]:
+    """Версия 0.2 плотностей: всё как в 0.1, но сторона сделки зеркальная."""
+    import tempfile
+
+    from bot.density import DensityEngine, find_wall_setup
+    from bot.density_v2 import DensityV2Engine, find_wall_setup_inverted
+    from bot.models import PendingOrder
+
+    print("\nТС плотностей, версия 0.2 (зеркало 0.1)")
+    results: List[bool] = []
+    ticker = Ticker(symbol="TESTUSDT", last_price=0.0, change_24h=0.02,
+                    turnover_24h=150_000_000, volume_24h=1_500_000)
+
+    # --- bid-стена: 0.1 покупает, 0.2 продаёт --------------------------------
+    tracker, view = _density_view(cfg, wall_side="bid")
+    ticker.last_price = view.mid
+    s1 = find_wall_setup(ticker, view, cfg)
+    s2 = find_wall_setup_inverted(ticker, view, cfg)
+    results.append(_check("0.1 у bid-стены открывает ЛОНГ",
+                          s1 is not None and s1.side == "long",
+                          s1.side if s1 else "нет сетапа"))
+    results.append(_check("0.2 у той же стены открывает ШОРТ",
+                          s2 is not None and s2.side == "short",
+                          s2.side if s2 else "нет сетапа"))
+    if s1 is None or s2 is None:
+        return results
+
+    # --- всё остальное должно совпадать --------------------------------------
+    results.append(_check("цена срабатывания совпадает",
+                          abs(s1.entry_price - s2.entry_price) < 1e-12,
+                          f"{s1.entry_price:.8g} == {s2.entry_price:.8g}"))
+    results.append(_check("стена та же самая",
+                          s1.wall.price == s2.wall.price and s1.wall.side == s2.wall.side,
+                          s2.wall.describe()))
+    results.append(_check("дисбаланс тот же", abs(s1.dominance - s2.dominance) < 1e-12,
+                          f"x{s2.dominance:.2f}"))
+
+    # --- ask-стена: зеркало в другую сторону ---------------------------------
+    tracker_a, view_a = _density_view(cfg, wall_side="ask")
+    ticker_a = Ticker(symbol="TESTUSDT", last_price=view_a.mid, change_24h=0.02,
+                      turnover_24h=150_000_000, volume_24h=1_500_000)
+    a1 = find_wall_setup(ticker_a, view_a, cfg)
+    a2 = find_wall_setup_inverted(ticker_a, view_a, cfg)
+    results.append(_check("0.1 у ask-стены открывает ШОРТ",
+                          a1 is not None and a1.side == "short",
+                          a1.side if a1 else "нет сетапа"))
+    results.append(_check("0.2 у той же стены открывает ЛОНГ",
+                          a2 is not None and a2.side == "long",
+                          a2.side if a2 else "нет сетапа"))
+    if a1 is not None and a2 is not None:
+        results.append(_check("цена срабатывания у ask-стены тоже совпадает",
+                              abs(a1.entry_price - a2.entry_price) < 1e-12,
+                              f"{a2.entry_price:.8g}"))
+
+    original_dir = cfg.data_dir
+    cfg.data_dir = tempfile.mkdtemp(prefix="selftest-density-v2-")
+    try:
+        e1 = DensityEngine(cfg, client=None)
+        e2 = DensityV2Engine(cfg, client=None)
+
+        # --- срабатывание: ждём одного и того же события ---------------------
+        qty = cfg.risk.notional_usd / s1.entry_price
+        o1 = PendingOrder(symbol="TESTUSDT", side=s1.side, price=s1.entry_price,
+                          qty=qty, placed_at=time.time(), setup=s1)
+        o2 = PendingOrder(symbol="TESTUSDT", side=s2.side, price=s2.entry_price,
+                          qty=qty, placed_at=time.time(), setup=s2)
+
+        import dataclasses
+        far = dataclasses.replace(view, best_ask=s1.entry_price * 1.01,
+                                  best_bid=s1.entry_price * 1.009)
+        touched = dataclasses.replace(view, best_ask=s1.entry_price,
+                                      best_bid=s1.entry_price * 0.999)
+        results.append(_check("пока цена не дошла — не срабатывает ни у одной версии",
+                              not e1._filled(o1, far) and not e2._filled(o2, far)))
+        results.append(_check("цена дошла до стены — срабатывают ОБЕ версии",
+                              e1._filled(o1, touched) and e2._filled(o2, touched)))
+
+        # --- позиции: зеркальные уровни --------------------------------------
+        p1 = e1.broker.open_from_limit(o1, entry_fee_rate=e1.entry_fee_rate())
+        e1.broker.positions.clear()
+        p2 = e2.broker.open_from_limit(o2, entry_fee_rate=e2.entry_fee_rate())
+
+        results.append(_check("вход по одной и той же цене",
+                              abs(p1.entry_price - p2.entry_price) < 1e-12,
+                              f"{p2.entry_price:.8g}"))
+        results.append(_check("стороны позиций противоположны",
+                              p1.side == "long" and p2.side == "short",
+                              f"{p1.side} vs {p2.side}"))
+        results.append(_check("у 0.1 тейк выше входа, у 0.2 — ниже",
+                              p1.take_price > p1.entry_price and p2.take_price < p2.entry_price))
+        results.append(_check("у 0.1 стоп ниже входа, у 0.2 — выше",
+                              p1.stop_price < p1.entry_price and p2.stop_price > p2.entry_price))
+
+        # Тейк зеркален по направлению. Расстояние в ЦЕНЕ у версий чуть
+        # разное, и так и должно быть: у 0.2 комиссия входа тейкерская, значит
+        # цене надо пройти немного дальше ради тех же чистых +5$. Поэтому
+        # сравниваем деньги (ниже), а здесь - знак и порядок величины.
+        d1 = p1.take_price - p1.entry_price
+        d2 = p2.take_price - p2.entry_price
+        results.append(_check("тейк направлен в противоположные стороны",
+                              d1 > 0 > d2, f"{d1:+.6g} / {d2:+.6g}"))
+        results.append(_check("расстояние до тейка отличается лишь на комиссию",
+                              abs(abs(d1) - abs(d2)) / abs(d1) < 0.05,
+                              f"{abs(abs(d1) - abs(d2)) / abs(d1) * 100:.1f}%"))
+        profit1 = e1.broker.net_pnl(p1, p1.take_price)
+        results.append(_check("обе версии дают одинаковую чистую прибыль по тейку",
+                              abs(profit1 - e2.broker.net_pnl(p2, p2.take_price)) < 0.01,
+                              f"{profit1:+.2f}$"))
+        results.append(_check("расстояние до стопа совпадает",
+                              abs((p1.stop_price - p1.entry_price)
+                                  + (p2.stop_price - p2.entry_price)) < 1e-9,
+                              f"{p1.stop_price - p1.entry_price:+.8g} / "
+                              f"{p2.stop_price - p2.entry_price:+.8g}"))
+
+        # --- деньги ----------------------------------------------------------
+        d = cfg.density
+        profit2 = e2.broker.net_pnl(p2, p2.take_price)
+        results.append(_check(f"у 0.2 тейк даёт те же +{d.take_profit_usd:.0f}$",
+                              abs(profit2 - d.take_profit_usd) < 0.05, f"{profit2:+.2f}$"))
+        results.append(_check("комиссия входа 0.2 тейкерская (ордер стоповый)",
+                              abs(p2.entry_fee_rate - cfg.risk.taker_fee) < 1e-12
+                              and abs(p1.entry_fee_rate - d.maker_fee) < 1e-12,
+                              f"0.1 {p1.entry_fee_rate}, 0.2 {p2.entry_fee_rate}"))
+
+        # --- выходы общие ----------------------------------------------------
+        e2.books._trackers["TESTUSDT"] = tracker
+        hold = e2._exit_reason(p2, view, p2.entry_price)
+        results.append(_check("пока плотность цела — 0.2 тоже держит", hold is None,
+                              hold or "держим"))
+        eaten_view = None
+        for _ in range(2):
+            eaten_view = tracker.update(*_book_snapshot(wall_side="bid", wall_shrink=0.10))
+        reason = e2._exit_reason(p2, eaten_view, p2.entry_price)
+        results.append(_check("выход по съеданию плотности работает и в 0.2",
+                              bool(reason) and "съедена" in (reason or ""), reason or "нет"))
     finally:
         cfg.data_dir = original_dir
     return results

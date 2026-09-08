@@ -95,11 +95,17 @@ class PaperBroker:
             log.info("    %s", note)
         return position
 
-    def open_from_limit(self, order: "PendingOrder") -> Position:
-        """Исполнение лимитки ТС плотностей: вход строго по её цене.
+    def open_from_limit(self, order: "PendingOrder",
+                        entry_fee_rate: Optional[float] = None) -> Position:
+        """Исполнение отложенного ордера ТС плотностей: вход строго по его цене.
 
-        Проскальзывания на входе нет по построению - лимитка либо исполняется
-        по своей цене, либо не исполняется вовсе. Комиссия входа мейкерская.
+        Проскальзывания на входе нет по построению - ордер либо срабатывает по
+        своей цене, либо не срабатывает вовсе.
+
+        entry_fee_rate задаёт комиссию входа. По умолчанию мейкерская: у версии
+        0.1 вход лимиткой. Версия 0.2 торгует те же стены в обратную сторону,
+        её ордер по механике стоповый (исполняется по рынку), поэтому она
+        передаёт сюда тейкерскую - иначе сравнение версий было бы нечестным.
         """
         risk = self.cfg.risk
         dcfg = self.cfg.density
@@ -107,10 +113,11 @@ class PaperBroker:
         price = order.price
         qty = order.qty
         notional = qty * price
+        entry_fee = dcfg.maker_fee if entry_fee_rate is None else entry_fee_rate
 
         # Уровни считаем от целей в деньгах, с уже учтённой комиссией круга
-        # (мейкер на входе + тейкер на выходе), чтобы +5$ были чистыми.
-        round_trip_fee = notional * (dcfg.maker_fee + risk.taker_fee)
+        # (вход + тейкер на выходе), чтобы +5$ были чистыми.
+        round_trip_fee = notional * (entry_fee + risk.taker_fee)
         take_move = (dcfg.take_profit_usd + round_trip_fee) / qty
         money_stop_move = (dcfg.stop_loss_usd - round_trip_fee) / qty
         # Второй стоп - за самой плотностью: если её прошли насквозь, идея сделки
@@ -144,7 +151,7 @@ class PaperBroker:
                 "turnover_24h": setup.ticker.turnover_24h,
                 "waited_sec": round(order.age_sec(), 1),
             },
-            entry_fee_rate=dcfg.maker_fee,
+            entry_fee_rate=entry_fee,
             exit_fee_rate=risk.taker_fee,
             last_price=price,
             best_price=price,
@@ -154,7 +161,7 @@ class PaperBroker:
         )
         self.positions[setup.symbol] = position
         log.info(
-            "[ДЕМО] %s %s @ %.8g по лимитке | qty %.6g | стоп %.8g | тейк %.8g | "
+            "[ДЕМО] %s %s @ %.8g по отложенному | qty %.6g | стоп %.8g | тейк %.8g | "
             "плотность %s | ждали %.0fс",
             "ЛОНГ" if setup.side == "long" else "ШОРТ", position.symbol, price, qty,
             stop_price, take_price, setup.wall.describe(), order.age_sec(),

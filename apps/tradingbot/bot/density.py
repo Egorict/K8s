@@ -209,6 +209,24 @@ class DensityEngine:
         self.pending: Dict[str, PendingOrder] = {}
         self._running = True
 
+    # --- точки расширения для следующих версий ТС -------------------------
+    #
+    # Версия 0.2 (bot/density_v2.py) торгует те же стены в противоположную
+    # сторону. Ей нужно подменить ровно три вещи: как строится сетап, когда
+    # ордер считается исполненным и по какой комиссии открывается позиция.
+    # Всё остальное - отбор монет, ведение и выходы - общее.
+
+    def find_setup(self, ticker: Ticker, view: OrderbookView) -> Optional[WallSetup]:
+        return find_wall_setup(ticker, view, self.cfg)
+
+    def entry_fee_rate(self) -> float:
+        """Комиссия входа: у 0.1 вход лимиткой, значит мейкерская."""
+        return self.cfg.density.maker_fee
+
+    def order_kind(self) -> str:
+        """Как называть ордер в логах и журнале."""
+        return "лимитка"
+
     # ------------------------------------------------------------------ вход
 
     def _place_order(self, setup: WallSetup) -> None:
@@ -217,10 +235,11 @@ class DensityEngine:
             symbol=setup.symbol, side=setup.side, price=setup.entry_price,
             qty=qty, placed_at=time.time(), setup=setup,
         )
-        log.info("[%s] лимитка %s @ %.8g перед плотностью %s (скор %.2f)",
-                 setup.symbol, "BUY" if setup.side == "long" else "SELL",
+        log.info("[%s] %s %s @ %.8g перед плотностью %s (скор %.2f)",
+                 setup.symbol, self.order_kind(),
+                 "BUY" if setup.side == "long" else "SELL",
                  setup.entry_price, setup.wall.describe(), setup.score)
-        self.journal.log_wall_signal(setup, "лимитка выставлена")
+        self.journal.log_wall_signal(setup, f"{self.order_kind()} выставлена")
 
     def _filled(self, order: PendingOrder, view: OrderbookView) -> bool:
         """Исполнилась ли лимитка.
@@ -244,10 +263,11 @@ class DensityEngine:
         # Пока лимитка висит, плотность может исчезнуть - тогда входить незачем.
         status = self._wall_alive(symbol, order.setup.wall)
         if not status["present"] or status["eaten"] >= self.cfg.density.wall_eaten_ratio:
-            log.info("[%s] снимаю лимитку: плотность %s", symbol,
+            log.info("[%s] снимаю %s: плотность %s", symbol, self.order_kind(),
                      "исчезла" if not status["present"] else
                      f"съедена на {status['eaten'] * 100:.0f}%")
-            self.journal.log_wall_signal(order.setup, "лимитка снята: плотности больше нет")
+            self.journal.log_wall_signal(
+                order.setup, f"{self.order_kind()} снята: плотности больше нет")
             self.pending.pop(symbol, None)
             return
 
@@ -257,14 +277,14 @@ class DensityEngine:
             if not allowed:
                 self.journal.log_wall_signal(order.setup, f"пропуск: {why}")
                 return
-            self.broker.open_from_limit(order)
-            self.journal.log_wall_signal(order.setup, "вход по лимитке")
+            self.broker.open_from_limit(order, entry_fee_rate=self.entry_fee_rate())
+            self.journal.log_wall_signal(order.setup, f"вход: {self.order_kind()} исполнена")
             return
 
         if order.age_sec() > self.cfg.density.order_ttl_sec:
-            log.info("[%s] лимитка не исполнилась за %.0fс - снимаю",
-                     symbol, order.age_sec())
-            self.journal.log_wall_signal(order.setup, "лимитка снята по таймауту")
+            log.info("[%s] %s не исполнилась за %.0fс - снимаю",
+                     symbol, self.order_kind(), order.age_sec())
+            self.journal.log_wall_signal(order.setup, f"{self.order_kind()} снята по таймауту")
             self.pending.pop(symbol, None)
 
     # ------------------------------------------------------------------ выход
@@ -353,7 +373,7 @@ class DensityEngine:
                     allowed, _ = self.broker.can_open(symbol)
                     if not allowed:
                         continue
-                    setup = find_wall_setup(ticker, view, self.cfg)
+                    setup = self.find_setup(ticker, view)
                     if setup is not None:
                         self._place_order(setup)
                 except Exception as exc:  # noqa: BLE001
