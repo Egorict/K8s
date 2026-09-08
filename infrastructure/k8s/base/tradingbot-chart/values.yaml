@@ -49,7 +49,10 @@ data:
   storageClass: longhorn
   mountPath: /data
 bot:
-  timezone: Europe/Moscow
+  # Часовой пояс во времени сделок, логов и state.json. Asia/Yekaterinburg —
+  # это ровно UTC+5 круглый год, без перехода на летнее время.
+  # (Europe/Moscow, стоявший здесь раньше, — UTC+3.)
+  timezone: Asia/Yekaterinburg
 # На каждого бота. В неймспейсе app действует ResourceQuota, и все боты
 # должны в неё влезать вместе с клиентом, сервером и базой: при четырёх ботах
 # это 850m/1152Mi запросов при квоте 1500m/1.5Gi.

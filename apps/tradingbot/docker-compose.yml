@@ -9,7 +9,7 @@ services:
     volumes:
       - bot-data:/data       # журналы переживают пересоздание контейнера
     environment:
-      TZ: Europe/Moscow
+      TZ: Asia/Yekaterinburg
     command: ["run", "--web"]
 
 volumes:

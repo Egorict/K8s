@@ -71,7 +71,7 @@ profit_pct_margin, max_profit_usd, max_loss_usd, exit_reason, entry_score, entry
 | `BOT_WEB` | `0` | `1` — поднять веб-панель |
 | `BOT_WEB_HOST` | `0.0.0.0` | адрес прослушивания |
 | `BOT_WEB_PORT` | `8080` | порт панели |
-| `TZ` | `Europe/Moscow` | часовой пояс во времени сделок |
+| `TZ` | `Asia/Yekaterinburg` (UTC+5) | часовой пояс во времени сделок |
 
 Параметры самой ТС (маржа, плечо, стоп, тейк, фильтры) — в `bot/config.py`
 или ключами запуска: `args: ["run", "--web", "--margin", "20", "--leverage", "20"]`.

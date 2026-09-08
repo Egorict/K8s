@@ -3,7 +3,7 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    TZ=Europe/Moscow \
+    TZ=Asia/Yekaterinburg \
     BOT_DATA_DIR=/data \
     BOT_WEB=1 \
     BOT_WEB_PORT=8080

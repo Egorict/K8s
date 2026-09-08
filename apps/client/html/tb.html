@@ -569,7 +569,7 @@ function setStatus(kind, text) {
 }
 
 // Отметка обновления сравнивается сама с собой, а не с часами браузера: время
-// в state.json записано в TZ бота (Europe/Moscow), и у зрителя из другого
+// в state.json записано в TZ бота (UTC+5), и у зрителя из другого
 // пояса разница часов читалась бы как «бот молчит».
 const seen = Object.create(null);   // botId -> { updated, at }
 
