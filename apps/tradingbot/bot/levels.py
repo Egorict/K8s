@@ -29,13 +29,19 @@ class HorizontalLevel:
     side: str            # 'resistance' | 'support'
     last_touch_idx: int  # индекс последнего касания в переданном списке свечей
     first_touch_idx: int
+    # Насколько сильно цена отбивалась от уровня после касаний (доля цены).
+    # 0 у уровней, найденных без проверки отбоя.
+    rejection: float = 0.0
 
     def distance_pct(self, price: float) -> float:
         """Расстояние от цены до уровня в долях: >0 - уровень выше цены."""
         return (self.price - price) / price if price > 0 else 0.0
 
     def describe(self) -> str:
-        return f"{self.price:.8g} ({self.touches} касаний)"
+        base = f"{self.price:.8g} ({self.touches} касаний"
+        if self.rejection > 0:
+            base += f", отбой {self.rejection * 100:.1f}%"
+        return base + ")"
 
 
 def _pivots(candles: Sequence[Candle], window: int, high_side: bool) -> List[int]:
@@ -57,11 +63,20 @@ def _pivots(candles: Sequence[Candle], window: int, high_side: bool) -> List[int
 
 
 def find_levels(candles: Sequence[Candle], side: str, tolerance: float = 0.004,
-                min_touches: int = 2, window: int = 3) -> List[HorizontalLevel]:
+                min_touches: int = 2, window: int = 3,
+                min_spacing: int = 0, min_rejection: float = 0.0) -> List[HorizontalLevel]:
     """Уровни по свечам, от самых "касаемых" к остальным.
 
     tolerance - на сколько (в долях цены) экстремумы могут расходиться, оставаясь
     одним уровнем. side: 'resistance' (по хаям) или 'support' (по лоям).
+
+    Два необязательных условия делают уровень "явным":
+      min_spacing   - касания разнесены минимум на столько свечей. Три подряд
+                      свечи у одной цены - это одно событие, а не три
+                      подтверждения;
+      min_rejection - после касания цена уходила от уровня хотя бы на эту долю.
+                      Без этого в уровни попадает любой локальный экстремум,
+                      от которого рынок никак не реагировал.
     """
     if len(candles) < window * 2 + 2:
         return []
@@ -82,26 +97,64 @@ def find_levels(candles: Sequence[Candle], side: str, tolerance: float = 0.004,
         if base > 0 and abs(item[1] - base) / base <= tolerance:
             cluster.append(item)
             continue
-        levels.append(_level_from(cluster, side))
+        levels.append(_level_from(cluster, side, candles, min_spacing, min_rejection))
         cluster = [item]
-    levels.append(_level_from(cluster, side))
+    levels.append(_level_from(cluster, side, candles, min_spacing, min_rejection))
 
     levels = [l for l in levels if l.touches >= min_touches]
+    if min_rejection > 0:
+        levels = [l for l in levels if l.rejection >= min_rejection]
     # Сильный уровень - тот, к которому приходили чаще; при равенстве берём
     # более свежий: старые уровни рынок уже отработал.
     levels.sort(key=lambda l: (l.touches, l.last_touch_idx), reverse=True)
     return levels
 
 
-def _level_from(cluster: Sequence[tuple], side: str) -> HorizontalLevel:
-    idxs = [i for i, _ in cluster]
+def _rejection_after(candles: Sequence[Candle], idx: int, price: float,
+                     high_side: bool, lookahead: int) -> float:
+    """Насколько цена ушла от уровня после касания, в долях."""
+    if price <= 0:
+        return 0.0
+    chunk = candles[idx + 1: idx + 1 + lookahead]
+    if not chunk:
+        return 0.0
+    if high_side:
+        # Сопротивление: после касания цена должна была уйти ВНИЗ.
+        return max(0.0, (price - min(c.low for c in chunk)) / price)
+    return max(0.0, (max(c.high for c in chunk) - price) / price)
+
+
+def _level_from(cluster: Sequence[tuple], side: str, candles: Sequence[Candle],
+                min_spacing: int, min_rejection: float) -> HorizontalLevel:
+    high_side = side == "resistance"
+    idxs = sorted(i for i, _ in cluster)
     prices = [p for _, p in cluster]
+    level_price = sum(prices) / len(prices)
+
+    # Разнесённость: жадно оставляем касания, между которыми есть промежуток.
+    if min_spacing > 0:
+        kept: List[int] = []
+        for i in idxs:
+            if not kept or i - kept[-1] >= min_spacing:
+                kept.append(i)
+        idxs = kept
+
+    rejection = 0.0
+    if min_rejection > 0 and idxs:
+        lookahead = max(min_spacing, 4) * 2
+        depths = [_rejection_after(candles, i, level_price, high_side, lookahead) for i in idxs]
+        # Уровень характеризует не рекордный отбой, а типичный: одиночный
+        # провал после случайного хая не должен выдавать себя за сопротивление.
+        depths.sort()
+        rejection = depths[len(depths) // 2]
+
     return HorizontalLevel(
-        price=sum(prices) / len(prices),
-        touches=len(cluster),
-        side="resistance" if side == "resistance" else "support",
-        last_touch_idx=max(idxs),
-        first_touch_idx=min(idxs),
+        price=level_price,
+        touches=len(idxs),
+        side="resistance" if high_side else "support",
+        last_touch_idx=max(idxs) if idxs else 0,
+        first_touch_idx=min(idxs) if idxs else 0,
+        rejection=rejection,
     )
 
 

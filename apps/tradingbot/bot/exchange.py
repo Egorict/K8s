@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 
 import aiohttp
 
-from .models import Candle, Level, Ticker
+from .models import Candle, Level, Ticker, TradePrint
 
 log = logging.getLogger("exchange")
 
@@ -163,6 +163,33 @@ class BybitPublic:
                 continue
         candles.sort(key=lambda c: c.ts)  # Bybit отдаёт новые первыми
         return candles
+
+    async def recent_trades(self, symbol: str, limit: int = 500) -> List["TradePrint"]:
+        """Лента принтов - реально прошедшие сделки, от свежих к старым.
+
+        Это единственный публичный источник, по которому видно АКТИВНОСТЬ:
+        стакан показывает намерения (их снимают), свечи усредняют минуту, а
+        лента - то, что действительно исполнилось, с точностью до миллисекунд.
+        На ней ТС пробоя и строит решение о входе и выходе.
+        """
+        result = await self._get(
+            "/v5/market/recent-trade",
+            {"category": self.category, "symbol": symbol, "limit": min(limit, 1000)},
+        )
+        out: List[TradePrint] = []
+        for row in result.get("list", []):
+            try:
+                out.append(
+                    TradePrint(
+                        ts=int(row["time"]),
+                        price=float(row["price"]),
+                        size=float(row["size"]),
+                        side=row.get("side", ""),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
 
     async def orderbook(self, symbol: str, depth: int = 200):
         """Снапшот стакана: (bids, asks) - от лучшей цены вглубь."""

@@ -222,7 +222,7 @@ const BOTS = [
   {
     id: "breakout",
     name: "Пробой уровня",
-    desc: "лонг на выходе за уровень с касаниями, по тренду",
+    desc: "лонг по активности у явного уровня, выход когда она упала",
   },
   {
     id: "btc",
@@ -409,13 +409,40 @@ function renderCurve(trades) {
 
 // ---- лимитки (ТС плотностей) -----------------------------------------------
 
+// Раздел «за чем бот следит прямо сейчас». Его содержимое зависит от ТС:
+// у плотностей это выставленные лимитки, у пробоя — уровни под наблюдением
+// с их текущей активностью. Различаем по полям самой записи, а не по имени
+// бота: так добавление ещё одной ТС не потребует правки этой функции.
 function renderPending(state) {
   const rows = state.pending_orders || [];
   const section = document.getElementById("pendingSection");
-  // У ТС импульса лимиток нет вовсе — не показываем пустой раздел.
+  // У ТС импульса и биткоина этого раздела нет вовсе — не показываем пустой.
   section.classList.toggle("hidden", !rows.length);
   if (!rows.length) return;
   document.getElementById("pendingCount").textContent = rows.length + " шт.";
+
+  const isLevels = rows[0] && rows[0].level !== undefined;
+  document.querySelector("#pendingSection h2").textContent =
+    isLevels ? "Уровни под наблюдением" : "Лимитки в стакане";
+
+  if (isLevels) {
+    document.getElementById("pending").innerHTML = table(
+      ["Монета", { label: "Уровень", num: 1 }, { label: "Касаний", num: 1 },
+       { label: "Принтов/мин", num: 1 }, { label: "Оборот у уровня", num: 1 },
+       "Активность", { label: "К фону", num: 1 }],
+      rows,
+      o => `<tr>
+        <td class="sym">${esc(o.symbol)}</td>
+        <td class="num">${price(o.level)}</td>
+        <td class="num muted">${esc(o.touches)}</td>
+        <td class="num">${esc(o.trades_per_min)}</td>
+        <td class="num">${esc(o.near_share_pct)}%</td>
+        <td><div class="bar"><i style="width:${Math.min(100, n(o.activity) * 100).toFixed(0)}%"></i></div></td>
+        <td class="num ${n(o.ratio) >= 1.6 ? "pos" : "muted"}">x${n(o.ratio).toFixed(1)}</td>
+      </tr>`);
+    return;
+  }
+
   document.getElementById("pending").innerHTML = table(
     ["Монета", "Сторона", { label: "Цена лимитки", num: 1 }, { label: "Плотность", num: 1 },
      { label: "Объём стены", num: 1 }, "Съедено", { label: "Ждём, с", num: 1 }],

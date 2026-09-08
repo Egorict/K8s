@@ -50,6 +50,44 @@ class Ticker:
 
 
 @dataclass
+class TradePrint:
+    """Одна прошедшая сделка из ленты принтов."""
+    ts: int              # время исполнения, мс
+    price: float
+    size: float
+    side: str            # 'Buy' | 'Sell' - агрессор
+
+    @property
+    def notional(self) -> float:
+        return self.price * self.size
+
+
+@dataclass
+class ActivitySnapshot:
+    """Замер активности у уровня в один момент времени.
+
+    ТС пробоя входит и выходит по ЭТИМ числам, а не по цене: импульсный пробой
+    живёт ровно столько, сколько в стакане и ленте есть движение.
+    """
+    ts: float = 0.0
+    trades_per_min: float = 0.0    # темп ленты принтов
+    volume_per_min: float = 0.0    # оборот, USD в минуту
+    near_share: float = 0.0        # доля оборота, прошедшая в зоне уровня
+    book_notional: float = 0.0     # объём заявок в зоне уровня, USD
+    swings: int = 0                # сколько раз цена пересекла уровень за окно
+    buy_ratio: float = 0.5         # доля покупок в обороте: >0.5 - давят вверх
+    score: float = 0.0             # сводная активность, 0..1
+
+    def describe(self) -> str:
+        return (f"{self.trades_per_min:.0f} принтов/мин, "
+                f"{self.volume_per_min:,.0f}$/мин, "
+                f"у уровня {self.near_share * 100:.0f}%, "
+                f"заявок {self.book_notional:,.0f}$, "
+                f"колебаний {self.swings}, "
+                f"покупок {self.buy_ratio * 100:.0f}%")
+
+
+@dataclass
 class Level:
     """Уровень стакана."""
     price: float

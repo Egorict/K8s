@@ -10,7 +10,7 @@ import time
 from typing import List
 
 from bot.config import Config
-from bot.models import Candle, Level, Ticker
+from bot.models import Candle, Level, Ticker, TradePrint
 from bot.orderbook import BookTracker
 from bot.paper import PaperBroker
 from bot.strategy import build_setup, find_impulse, find_stall
@@ -270,10 +270,11 @@ def run_density_selftest(cfg: Config) -> List[bool]:
 
 
 def _level_candles(touches: int = 4, level: float = 100.0, spacing: int = 14,
-                   breakout: bool = True) -> List[Candle]:
-    """Свечи, где цена несколько раз упирается в уровень, а затем пробивает его.
+                   breakout: bool = True, rejection: bool = True) -> List[Candle]:
+    """Свечи с явным уровнем: несколько разнесённых касаний и отбои вниз.
 
-    Между касаниями обязательно откаты вниз, иначе это не уровень, а полка.
+    rejection=False - цена упирается в уровень, но не отбивается (полка).
+    Такой уровень явным считаться не должен.
     """
     out: List[Candle] = []
     ts = int(time.time() * 1000) - 400 * 900_000
@@ -285,13 +286,15 @@ def _level_candles(touches: int = 4, level: float = 100.0, spacing: int = 14,
             c = price * 1.004
             out.append(Candle(ts, o, max(o, c) * 1.0008, min(o, c) * 0.9992, c, 1000.0))
             price, ts = c, ts + 900_000
-        o = price                                          # касание и отбой
+        o = price                                          # касание
         c = level * 0.995
         out.append(Candle(ts, o, level, min(o, c) * 0.999, c, 1400.0))
         price, ts = c, ts + 900_000
-        for _ in range(spacing // 2):                      # откат вниз
+        # Отбой вниз: без него уровень не «явный».
+        step = 0.996 if rejection else 0.9998
+        for _ in range(spacing // 2):
             o = price
-            c = price * 0.996
+            c = price * step
             out.append(Candle(ts, o, max(o, c) * 1.0008, min(o, c) * 0.9992, c, 900.0))
             price, ts = c, ts + 900_000
 
@@ -303,86 +306,231 @@ def _level_candles(touches: int = 4, level: float = 100.0, spacing: int = 14,
 
     o = price
     if breakout:
-        c = level * 1.004                                  # "немного пересекли"
-        out.append(Candle(ts, o, c * 1.0005, o * 0.999, c, 4000.0))   # объём x4 к фону
+        c = level * 1.004
+        out.append(Candle(ts, o, c * 1.0005, o * 0.999, c, 4000.0))
     else:
-        c = level * 0.998                                  # уровень устоял
+        c = level * 0.998
         out.append(Candle(ts, o, level, o * 0.995, c, 1200.0))
     return out
 
 
+def _shelf_candles(level: float = 100.0, n: int = 120) -> List[Candle]:
+    """Полка: цена липнет под уровнем и касается его, но НЕ отбивается.
+
+    Формально касаний много, а уровня как такового нет - рынок на него никак
+    не реагирует. Такое сопротивление ТС брать не должна.
+    """
+    out: List[Candle] = []
+    ts = int(time.time() * 1000) - n * 900_000
+    for i in range(n):
+        o = level * 0.9990
+        c = level * 0.9992
+        high = level if i % 6 == 0 else level * 0.9995   # регулярные касания
+        low = level * 0.9985                             # отбой всего 0.15%
+        out.append(Candle(ts, o, high, low, c, 1000.0))
+        ts += 900_000
+    return out
+
+
+def _trend_candles(up: bool = True, n: int = 90, start: float = 100.0) -> List[Candle]:
+    """Ровный тренд вверх или вниз - для проверки фильтра тренда."""
+    out: List[Candle] = []
+    ts = int(time.time() * 1000) - n * 900_000
+    price = start
+    step = 1.004 if up else 0.996
+    for _ in range(n):
+        o = price
+        c = price * step
+        out.append(Candle(ts, o, max(o, c) * 1.001, min(o, c) * 0.999, c, 1000.0))
+        price, ts = c, ts + 900_000
+    return out
+
+
+def _bounce_in_downtrend(n: int = 90, start: float = 100.0) -> List[Candle]:
+    """Падение, а в конце короткий отскок - классическая ловушка для пробоя."""
+    out = _trend_candles(up=False, n=n - 12, start=start)
+    price = out[-1].close
+    ts = out[-1].ts + 900_000
+    for _ in range(12):
+        o = price
+        c = price * 1.006
+        out.append(Candle(ts, o, max(o, c) * 1.001, min(o, c) * 0.999, c, 1500.0))
+        price, ts = c, ts + 900_000
+    return out
+
+
+def _prints(count: int, level: float, span_sec: float, near_share: float = 0.8,
+            swings: bool = True, buy_share: float = 0.7, notional: float = 900.0
+            ) -> List[TradePrint]:
+    """Синтетическая лента принтов вокруг уровня.
+
+    count за span_sec задаёт темп; near_share - какая доля сделок прошла в зоне
+    уровня; swings - чередуются ли стороны (цена «колеблется»).
+    """
+    out: List[TradePrint] = []
+    now_ms = int(time.time() * 1000)
+    step_ms = max(1.0, span_sec * 1000 / max(count, 1))
+    for i in range(count):
+        ts = int(now_ms - i * step_ms)
+        if i < count * near_share:
+            # В зоне уровня: чередуем стороны, чтобы получились колебания.
+            offset = 0.0008 if (swings and i % 2 == 0) else -0.0008
+            price = level * (1 + offset)
+        else:
+            price = level * 0.985          # заметно в стороне от уровня
+        side = "Buy" if i % 10 < buy_share * 10 else "Sell"
+        out.append(TradePrint(ts=ts, price=price, size=notional / price, side=side))
+    return out
+
+
 def run_breakout_selftest(cfg: Config) -> List[bool]:
-    """ТС пробоя: уровень с касаниями, вход сразу за ним, выходы."""
+    """ТС импульсного пробоя: тренд, явный уровень, вход и выход по активности."""
     import tempfile
 
-    from bot.breakout import BreakoutEngine, find_breakout
+    from bot.activity import ActivityTracker, measure
+    from bot.breakout import BreakoutEngine, TrendScanner, build_setup, in_zone, pick_level
     from bot.levels import find_levels
 
-    print("\nТС пробоя уровня (синтетические свечи)")
+    print("\nТС импульсного пробоя (синтетические свечи и лента)")
     results: List[bool] = []
-    bcfg = cfg.breakout
+    b = cfg.breakout
+    level_price = 100.0
 
+    # --- тренд ---------------------------------------------------------------
+    scanner = TrendScanner(client=None, cfg=cfg)
+    ok_up, why_up = scanner._uptrend(_trend_candles(up=True))
+    results.append(_check("восходящий тренд распознан", ok_up, why_up))
+    ok_down, why_down = scanner._uptrend(_trend_candles(up=False))
+    results.append(_check("нисходящий тренд отсеян", not ok_down, why_down))
+    ok_bounce, why_bounce = scanner._uptrend(_bounce_in_downtrend())
+    results.append(_check("отскок внутри падения отсеян", not ok_bounce, why_bounce))
+
+    # --- явный уровень -------------------------------------------------------
     candles = _level_candles()
-    levels = find_levels(candles[:-1], side="resistance", tolerance=bcfg.level_tolerance,
-                         min_touches=bcfg.min_touches, window=bcfg.pivot_window)
-    results.append(_check("уровень с касаниями найден", bool(levels),
+    levels = find_levels(candles, side="resistance", tolerance=b.level_tolerance,
+                         min_touches=b.min_touches, window=b.pivot_window,
+                         min_spacing=b.min_touch_spacing, min_rejection=b.min_rejection_pct)
+    results.append(_check("явный уровень найден", bool(levels),
                           levels[0].describe() if levels else "нет"))
     if levels:
-        results.append(_check("касаний не меньше двух", levels[0].touches >= 2,
+        results.append(_check("касаний 2 и больше", levels[0].touches >= b.min_touches,
                               str(levels[0].touches)))
-        results.append(_check("цена уровня близка к настоящей",
-                              abs(levels[0].price - 100.0) / 100.0 < 0.01,
-                              f"{levels[0].price:.4f}"))
+        results.append(_check("отбои от уровня зафиксированы",
+                              levels[0].rejection >= b.min_rejection_pct,
+                              f"{levels[0].rejection * 100:.1f}%"))
 
-    ticker = Ticker(symbol="TESTUSDT", last_price=candles[-1].close, change_24h=0.12,
+    shelf = _shelf_candles()
+    weak = find_levels(shelf, side="resistance", tolerance=b.level_tolerance,
+                       min_touches=b.min_touches, window=b.pivot_window,
+                       min_spacing=b.min_touch_spacing, min_rejection=b.min_rejection_pct)
+    results.append(_check("полка без отбоев явным уровнем не считается", not weak,
+                          weak[0].describe() if weak else "отсеяна"))
+    # ...а без требования отбоя тот же набор свечей уровень бы дал - значит
+    # отсеивает именно проверка реакции цены, а не нехватка касаний.
+    naive = find_levels(shelf, side="resistance", tolerance=b.level_tolerance,
+                        min_touches=b.min_touches, window=b.pivot_window)
+    results.append(_check("без проверки отбоя та же полка проходит - фильтр работает",
+                          bool(naive), naive[0].describe() if naive else "нет"))
+
+    level = pick_level(candles, candles[-1].close, cfg)
+    results.append(_check("уровень выбран для работы", level is not None,
+                          level.describe() if level else "нет"))
+    if level is None:
+        return results
+
+    # --- зона входа: обе стороны уровня --------------------------------------
+    results.append(_check("вход разрешён НАД уровнем",
+                          in_zone(level.price * 1.002, level, cfg)))
+    results.append(_check("вход разрешён ПОД уровнем",
+                          in_zone(level.price * 0.998, level, cfg)))
+    results.append(_check("далеко от уровня входа нет",
+                          not in_zone(level.price * 1.05, level, cfg)))
+
+    # --- замер активности ----------------------------------------------------
+    bids = [Level(level.price * (1 - 0.0005 * i), 60.0) for i in range(1, 12)]
+    asks = [Level(level.price * (1 + 0.0005 * i), 60.0) for i in range(1, 12)]
+
+    live = measure(_prints(400, level.price, span_sec=60), bids, asks, level.price, b)
+    results.append(_check("активная лента даёт высокий скор", live.score >= b.min_entry_score,
+                          f"{live.score:.2f} | {live.describe()}"))
+    results.append(_check("колебания у уровня посчитаны", live.swings >= b.min_swings,
+                          str(live.swings)))
+    results.append(_check("доля оборота у уровня посчитана", live.near_share >= b.min_near_share,
+                          f"{live.near_share * 100:.0f}%"))
+
+    quiet = measure(_prints(12, level.price, span_sec=60, near_share=0.2, swings=False),
+                    bids, asks, level.price, b)
+    results.append(_check("вялая лента скор не даёт", quiet.score < b.min_entry_score,
+                          f"{quiet.score:.2f}"))
+
+    # Активность в стороне от уровня входом считаться не должна.
+    aside = measure(_prints(400, level.price, span_sec=60, near_share=0.0),
+                    bids, asks, level.price, b)
+    results.append(_check("торговля в стороне от уровня не считается активностью",
+                          aside.near_share < b.min_near_share,
+                          f"{aside.near_share * 100:.0f}%"))
+
+    # --- вход ----------------------------------------------------------------
+    ticker = Ticker(symbol="TESTUSDT", last_price=level.price * 0.999, change_24h=0.12,
                     turnover_24h=50_000_000, volume_24h=1_000_000)
-    setup = find_breakout(ticker, candles, None, cfg)
-    results.append(_check("сетап пробоя собран", setup is not None,
+    setup = build_setup(ticker, level, live, ratio=2.5, cfg=cfg)
+    results.append(_check("сетап собран по активности", setup is not None,
                           f"скор {setup.score:.2f}" if setup else "нет"))
     if setup is not None:
         results.append(_check("сделка только в лонг", setup.side == "long", setup.side))
-        results.append(_check("вход сразу за уровнем, а не вдогонку",
-                              setup.extra["break_pct"] <= bcfg.max_break_pct,
-                              f"{setup.extra['break_pct'] * 100:.2f}%"))
+        results.append(_check("вход возможен ДО пробоя (цена под уровнем)",
+                              setup.price < level.price,
+                              f"{setup.price:.4f} < {level.price:.4f}"))
 
-    held = _level_candles(breakout=False)
-    ticker_held = Ticker(symbol="TESTUSDT", last_price=held[-1].close, change_24h=0.12,
-                         turnover_24h=50_000_000, volume_24h=1_000_000)
-    results.append(_check("без пробоя входа нет",
-                          find_breakout(ticker_held, held, None, cfg) is None))
+    results.append(_check("без превышения фона входа нет",
+                          build_setup(ticker, level, live, ratio=1.0, cfg=cfg) is None))
+    results.append(_check("на вялой активности входа нет",
+                          build_setup(ticker, level, quiet, ratio=3.0, cfg=cfg) is None))
+
+    sellers = measure(_prints(400, level.price, span_sec=60, buy_share=0.2),
+                      bids, asks, level.price, b)
+    results.append(_check("при продавцах-агрессорах входа нет",
+                          build_setup(ticker, level, sellers, ratio=3.0, cfg=cfg) is None))
 
     if setup is None:
         return results
 
+    # --- выход по падению активности -----------------------------------------
     original_dir = cfg.data_dir
     cfg.data_dir = tempfile.mkdtemp(prefix="selftest-breakout-")
     try:
         engine = BreakoutEngine(cfg, client=None)
-        level = setup.extra["level"]
         position = engine.broker.open_market(
-            setup, stop_usd=bcfg.stop_loss_usd, take_usd=bcfg.stop_loss_usd * 4,
-            stop_price_limit=level * (1.0 - bcfg.invalidation_pct))
-        engine._levels[setup.symbol] = level
-        results.append(_check("стоп поставлен под уровень, а не по деньгам",
-                              position.stop_price < level,
-                              f"стоп {position.stop_price:.4f} < уровень {level:.4f}"))
-        loss = engine.broker.net_pnl(position, position.stop_price)
-        results.append(_check("убыток по стопу меньше денежного потолка",
-                              abs(loss) < bcfg.stop_loss_usd, f"{loss:+.2f}$"))
+            setup, stop_usd=b.stop_loss_usd, take_usd=b.take_profit_usd,
+            stop_price_limit=level.price * (1.0 - b.invalidation_pct))
+        engine._entry_levels[setup.symbol] = level.price
+        tracker = engine.tracker(setup.symbol)
+        tracker.reset_peak()
+        tracker.note_peak(live)
 
-        up = position.entry_price * 1.02
-        engine.broker.track(position, up)
-        results.append(_check("на растущем импульсе держим",
-                              engine._exit_reason(position, up) is None))
-        back = position.entry_price * 1.004
-        engine.broker.track(position, back)
-        reason = engine._exit_reason(position, back)
-        results.append(_check("выход по затуханию импульса",
-                              bool(reason) and "утих" in (reason or ""), reason or "нет"))
+        entry = position.entry_price
+        results.append(_check("пока активность держится - сидим в сделке",
+                              engine._exit_reason(position, entry, live, tracker) is None))
 
-        false_break = engine._exit_reason(position, level * 0.995)
-        results.append(_check("выход по ложному пробою",
-                              "ложный пробой" in (false_break or ""), false_break or "нет"))
+        # Ключевая проверка: цена НЕ изменилась, упала только активность.
+        fading = measure(_prints(30, level.price, span_sec=60, near_share=0.3, swings=False),
+                         bids, asks, level.price, b)
+        reason = engine._exit_reason(position, entry, fading, tracker)
+        results.append(_check("выход при падении активности (цена та же)",
+                              bool(reason) and "активность" in (reason or ""),
+                              reason or "нет"))
+
+        results.append(_check("пик активности отслеживается",
+                              tracker.peak_score >= live.score,
+                              f"пик {tracker.peak_score:.2f}"))
+
+        # Тейк и уход под уровень остаются предохранителями.
+        take = engine._exit_reason(position, position.take_price, live, tracker)
+        results.append(_check("тейк после пробоя работает", "тейк" in (take or ""),
+                              take or "нет"))
+        broken = engine._exit_reason(position, level.price * 0.99, live, tracker)
+        results.append(_check("уход под уровень закрывает сделку",
+                              "уровень" in (broken or ""), broken or "нет"))
     finally:
         cfg.data_dir = original_dir
     return results
