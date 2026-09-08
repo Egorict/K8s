@@ -169,7 +169,8 @@ class BtcEngine:
             await asyncio.sleep(interval)
             stats = self.broker.stats()
             self.journal.save_state(list(self.broker.positions.values()), stats,
-                                    [self.symbol], strategy="btc")
+                                    [self.symbol], strategy="btc",
+                                    version=self.cfg.version)
             log.info("СТАТУС | %s | сделок %d (W%d/L%d, winrate %.0f%%) | открыто %d | итог %+.2f$",
                      self.symbol, stats["trades"], stats["wins"], stats["losses"],
                      stats["winrate"], stats["open"], stats["net_pnl_usd"])
@@ -201,7 +202,8 @@ class BtcEngine:
     def shutdown_report(self) -> None:
         stats = self.broker.stats()
         self.journal.save_state(list(self.broker.positions.values()), stats,
-                                [self.symbol], strategy="btc")
+                                [self.symbol], strategy="btc",
+                                version=self.cfg.version)
         log.info("=" * 70)
         log.info("ИТОГ ДЕМО-СЕССИИ (ТС биткоина)")
         log.info("  сделок: %d | прибыльных: %d | убыточных: %d | winrate: %.1f%%",

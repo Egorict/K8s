@@ -14,6 +14,8 @@ metadata:
   labels:
     app: tradingbot
     bot: {{ .name }}
+    strategy: {{ .strategy }}
+    botVersion: {{ .version | default "none" | quote }}
   # Как и у архива клиента: том переживает удаление релиза, иначе ArgoCD
   # снёс бы вместе с чартом всю историю сделок.
   annotations:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import importlib
 import logging
 import logging.handlers
 import os
@@ -79,6 +80,8 @@ def apply_args(cfg: Config, args: argparse.Namespace) -> None:
         cfg.data_dir = args.data_dir
     if args.strategy:
         cfg.strategy = args.strategy
+    if args.version:
+        cfg.version = args.version
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
@@ -94,18 +97,28 @@ def _install_signal_handlers(stop: asyncio.Event) -> None:
             pass  # Windows: обойдёмся KeyboardInterrupt
 
 
+DEFAULT_ENGINES = {
+    "impulse": "bot.engine:Engine",
+    "density": "bot.density:DensityEngine",
+    "breakout": "bot.breakout:BreakoutEngine",
+    "btc": "bot.btc:BtcEngine",
+}
+
+
 def _make_engine(cfg: Config, client: BybitPublic):
-    """Одна ТС на процесс: у каждой свой журнал, и статистика не смешивается."""
-    if cfg.strategy == "density":
-        from bot.density import DensityEngine
-        return DensityEngine(cfg, client)
-    if cfg.strategy == "breakout":
-        from bot.breakout import BreakoutEngine
-        return BreakoutEngine(cfg, client)
-    if cfg.strategy == "btc":
-        from bot.btc import BtcEngine
-        return BtcEngine(cfg, client)
-    return Engine(cfg, client)
+    """Одна ТС и одна её версия на процесс.
+
+    У каждого пода свой журнал, поэтому статистика версий не смешивается, а
+    выкладка новой версии не трогает работающую старую.
+    """
+    from bot import versions
+
+    path = versions.engine_path(cfg.strategy, cfg.version) or DEFAULT_ENGINES.get(cfg.strategy)
+    if not path:
+        raise SystemExit(f"Неизвестная ТС: {cfg.strategy}")
+    module_name, _, class_name = path.partition(":")
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)(cfg, client)
 
 
 async def run_bot(cfg: Config) -> None:
@@ -180,12 +193,31 @@ def main() -> None:
                         help="какую ТС запускать: impulse (шорт истощения импульса), "
                              "density (плотности в стакане), breakout (пробой уровня), "
                              "btc (откуп просадки биткоина)")
+    parser.add_argument("--version", help="версия ТС из bot/versions.py (например 0.1). "
+                                          "По умолчанию последняя из реестра")
+    parser.add_argument("--versions", action="store_true",
+                        help="показать список версий всех ТС и выйти")
     parser.add_argument("--debug", action="store_true", help="подробные логи")
     args = parser.parse_args()
+
+    from bot import versions as versions_registry
+
+    if args.versions:
+        for strategy in sorted(versions_registry.VERSIONS):
+            newest = versions_registry.latest(strategy)
+            print(f"{strategy}:")
+            for v in versions_registry.available(strategy):
+                mark = " (последняя)" if v == newest else ""
+                print(f"  v{v}{mark} - {versions_registry.get(strategy, v).notes}")
+        return
 
     cfg = CONFIG
     apply_args(cfg, args)
     setup_logging(cfg, args.debug)
+
+    # Версия накладывается ПОСЛЕ ключей запуска: ключи задают базу (каталог
+    # данных, размер сделки), а версия - отличия конкретной гипотезы.
+    cfg.version = versions_registry.apply(cfg, cfg.strategy, cfg.version)
 
     if args.command == "report":
         report(cfg)

@@ -9,36 +9,54 @@ image:
   # смотри фильтр "bot" в .github/workflows/deploy.yaml.
   tag: 63f7cc3de754aab265738c30ee19d6dfd49049eb
   pullPolicy: IfNotPresent
-# Боты. Один под = одна торговая система = свой том с журналом, поэтому
-# статистика по каждой ТС остаётся чистой и их можно честно сравнивать.
-# Образ у всех один и тот же, различие — ключ --strategy.
+# Боты. Один под = одна ТС ОДНОЙ ВЕРСИИ = свой том с журналом. Поэтому
+# статистика каждой версии остаётся чистой, а выкладка новой версии не трогает
+# работающую старую: это просто ещё один элемент списка, а не замена прежнего.
+# Образ у всех один, различаются ключи --strategy и --version.
+#
+# Имя элемента идёт в имена ресурсов (Deployment/Service/PVC) и в URL панели,
+# поэтому: только строчные буквы, цифры и дефис — точка в именах Service
+# запрещена. Отсюда breakout-v0-1, а не breakout-v0.1.
+#
+# КАК ВЫКАТИТЬ НОВУЮ ВЕРСИЮ (старая продолжит работать):
+#   1) опишите её в apps/tradingbot/bot/versions.py;
+#   2) добавьте сюда элемент, НЕ трогая существующий:
+#        - name: breakout-v0-2
+#          strategy: breakout
+#          version: "0.2"
+#          args: ["run", "--web", "--strategy", "breakout", "--version", "0.2"]
+#          storage: 2Gi
+#   3) добавьте роут в apps/client/nginx.conf и версию в BOTS в
+#      apps/client/html/tb.html.
+#   Старую версию удаляйте только когда решите, что сравнение закончено —
+#   вместе с её PVC (у него resource-policy: keep, ArgoCD сам его не тронет).
 #
 # storage: 2Gi с большим запасом. trades.csv растёт медленно, а лог ограничен
 # 20 МБ (RotatingFileHandler, 4 файла по 5).
 # ВАЖНО: уменьшить уже созданный PVC нельзя — Kubernetes запрещает shrink,
-# и ArgoCD упрётся в ошибку синка. Менять размер только вместе с удалением PVC
-# (у них resource-policy: keep, сам ArgoCD их не тронет).
-#
-# Добавить третью ТС = дописать сюда элемент (и роут в apps/client/nginx.conf,
-# и вкладку в apps/client/html/tb.html).
+# и ArgoCD упрётся в ошибку синка. Менять размер только вместе с удалением PVC.
 bots:
-  - name: impulse
+  - name: impulse-v0-1
     # Строго 1 реплика: две писали бы сделки в один файл, да и PVC
     # ReadWriteOnce второму поду не отдадут.
     strategy: impulse
-    args: ["run", "--web", "--strategy", "impulse"]
+    version: "0.1"
+    args: ["run", "--web", "--strategy", "impulse", "--version", "0.1"]
     storage: 2Gi
-  - name: density
+  - name: density-v0-1
     strategy: density
-    args: ["run", "--web", "--strategy", "density"]
+    version: "0.1"
+    args: ["run", "--web", "--strategy", "density", "--version", "0.1"]
     storage: 2Gi
-  - name: breakout
+  - name: breakout-v0-1
     strategy: breakout
-    args: ["run", "--web", "--strategy", "breakout"]
+    version: "0.1"
+    args: ["run", "--web", "--strategy", "breakout", "--version", "0.1"]
     storage: 2Gi
-  - name: btc
+  - name: btc-v0-1
     strategy: btc
-    args: ["run", "--web", "--strategy", "btc"]
+    version: "0.1"
+    args: ["run", "--web", "--strategy", "btc", "--version", "0.1"]
     storage: 2Gi
 service:
   # ClusterIP: снаружи боты не доступны. Страница /tb живёт в nginx клиента,

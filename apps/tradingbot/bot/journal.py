@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -32,6 +33,23 @@ SIGNAL_COLUMNS = [
     "time", "symbol", "price", "timeframe", "score", "action",
     "change_24h_pct", "turnover_24h_usd", "impulses", "stall", "book", "notes",
 ]
+
+
+def _json_safe(value):
+    """Готовит структуру к json.dump: inf и nan -> null.
+
+    json.dump по умолчанию пишет их как Infinity/NaN - это валидный Python,
+    но НЕ валидный JSON: панель падает на JSON.parse и показывает бота как
+    недоступного. Источники таких значений мы правим, но страховка нужна и
+    здесь: один неудачный делёж не должен ронять всю страницу.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def _ts(value: float) -> str:
@@ -176,12 +194,15 @@ class Journal:
         self._append(self.signals_csv, SIGNAL_COLUMNS, row)
 
     def save_state(self, positions: List[Position], stats: Dict, watchlist: List[str],
-                   strategy: str = "impulse", pending: Optional[List[Dict]] = None) -> None:
+                   strategy: str = "impulse", pending: Optional[List[Dict]] = None,
+                   version: str = "") -> None:
         payload = {
             "updated": _ts(time.time()),
             # Панель показывает несколько ботов рядом, и каждый должен
-            # представляться сам - иначе по одному state.json не понять, чей он.
+            # представляться сам - иначе по одному state.json не понять, чей он
+            # и какой версии.
             "strategy": strategy,
+            "version": version,
             "stats": stats,
             "watchlist": watchlist,
             # Выставленные, но ещё не исполненные лимитки (ТС плотностей).
@@ -208,5 +229,8 @@ class Journal:
         }
         tmp = self.state_json + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False, indent=2)
+            # allow_nan=False - страховка второго уровня: если _json_safe
+            # что-то упустит, лучше упасть здесь с внятной ошибкой, чем молча
+            # записать файл, на котором сломается панель.
+            json.dump(_json_safe(payload), fh, ensure_ascii=False, indent=2, allow_nan=False)
         os.replace(tmp, self.state_json)

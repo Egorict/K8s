@@ -434,7 +434,7 @@ class BreakoutEngine:
             stats = self.broker.stats()
             self.journal.save_state(list(self.broker.positions.values()), stats,
                                     list(self.watchlist), strategy="breakout",
-                                    pending=self._hot_view())
+                                    pending=self._hot_view(), version=self.cfg.version)
             log.info(
                 "СТАТУС | наблюдаю %d монет, у уровня %d | сделок %d (W%d/L%d, winrate %.0f%%) "
                 "| открыто %d | итог %+.2f$",
@@ -470,7 +470,7 @@ class BreakoutEngine:
         stats = self.broker.stats()
         self.journal.save_state(list(self.broker.positions.values()), stats,
                                 list(self.watchlist), strategy="breakout",
-                                pending=self._hot_view())
+                                pending=self._hot_view(), version=self.cfg.version)
         log.info("=" * 70)
         log.info("ИТОГ ДЕМО-СЕССИИ (ТС импульсного пробоя)")
         log.info("  сделок: %d | прибыльных: %d | убыточных: %d | winrate: %.1f%%",

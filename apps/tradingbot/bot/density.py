@@ -33,7 +33,7 @@ from .indicators import atr, scale
 from .journal import Journal
 from .models import OrderbookView, PendingOrder, Ticker, Wall, WallSetup
 from .orderbook import BookManager
-from .paper import PaperBroker
+from .paper import PaperBroker, fmt_profit_factor
 
 log = logging.getLogger("density")
 
@@ -368,6 +368,7 @@ class DensityEngine:
             self.journal.save_state(
                 list(self.broker.positions.values()), stats, list(self.watchlist),
                 strategy="density", pending=self._pending_view(),
+                version=self.cfg.version,
             )
             log.info(
                 "СТАТУС | наблюдаю %d монет | лимиток %d | сделок %d (W%d/L%d, winrate %.0f%%) "
@@ -419,13 +420,14 @@ class DensityEngine:
         self.journal.save_state(
             list(self.broker.positions.values()), stats, list(self.watchlist),
             strategy="density", pending=self._pending_view(),
+            version=self.cfg.version,
         )
         log.info("=" * 70)
         log.info("ИТОГ ДЕМО-СЕССИИ (ТС плотностей)")
         log.info("  сделок: %d | прибыльных: %d | убыточных: %d | winrate: %.1f%%",
                  stats["trades"], stats["wins"], stats["losses"], stats["winrate"])
-        log.info("  средняя прибыль: %+.2f$ | средний убыток: %+.2f$ | профит-фактор: %.2f",
-                 stats["avg_win"], stats["avg_loss"], stats["profit_factor"])
+        log.info("  средняя прибыль: %+.2f$ | средний убыток: %+.2f$ | профит-фактор: %s",
+                 stats["avg_win"], stats["avg_loss"], fmt_profit_factor(stats["profit_factor"]))
         log.info("  чистый результат: %+.2f$", stats["net_pnl_usd"])
         log.info("  журнал сделок: %s", self.cfg.trades_csv)
         log.info("=" * 70)

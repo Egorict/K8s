@@ -7,6 +7,12 @@ metadata:
   labels:
     app: tradingbot
     bot: {{ .name }}
+    # Метки ТС и версии — чтобы выбирать поды одной стратегии целиком
+    # (-l strategy=breakout) или конкретную версию. В selector их НЕТ:
+    # он неизменяем, а добавление метки туда сломало бы обновление
+    # существующих Deployment.
+    strategy: {{ .strategy }}
+    botVersion: {{ .version | default "none" | quote }}
 spec:
   # Строго 1: две реплики одной ТС писали бы сделки в один и тот же файл,
   # и статистика превратилась бы в кашу.
@@ -24,6 +30,8 @@ spec:
       labels:
         app: tradingbot
         bot: {{ .name }}
+        strategy: {{ .strategy }}
+        botVersion: {{ .version | default "none" | quote }}
     spec:
       # Бот не обращается к Kubernetes API — токен ServiceAccount ему не нужен.
       automountServiceAccountToken: false
@@ -50,10 +58,12 @@ spec:
               value: "1"
             - name: BOT_WEB_PORT
               value: {{ $.Values.service.port | quote }}
-            # Дублирует --strategy в args: если аргументы когда-нибудь
-            # перепишут через values, ТС всё равно останется той же.
+            # Дублируют --strategy/--version в args: если аргументы когда-нибудь
+            # перепишут через values, ТС и версия всё равно останутся теми же.
             - name: BOT_STRATEGY
               value: {{ .strategy | quote }}
+            - name: BOT_VERSION
+              value: {{ .version | default "" | quote }}
           ports:
             - name: http
               containerPort: {{ $.Values.service.port }}

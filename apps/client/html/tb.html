@@ -13,8 +13,12 @@
   Своей страницы у ботов наружу нет: она ходит за данными в абсолютный
   /api/state, а этот префикс на клиенте занят server-app.
 
-  Добавить третью ТС: элемент в BOTS ниже, роут в nginx.conf, элемент в
-  bots[] в infrastructure/k8s/base/tradingbot-chart/values.yaml.
+  У каждой ТС свои версии, и каждая версия — отдельный под со своим журналом:
+  выкатывая новую, старую не выключают, они торгуют параллельно.
+
+  Добавить ТС или версию: элемент в BOTS ниже, роут в nginx.conf, элемент в
+  bots[] в infrastructure/k8s/base/tradingbot-chart/values.yaml (и сама версия
+  в apps/tradingbot/bot/versions.py).
 -->
 <style>
   :root {
@@ -63,6 +67,7 @@
   .bot {
     text-align: left; padding: 13px 16px; border-radius: 10px; background: var(--card);
     border: 1px solid var(--line); cursor: pointer; display: block; width: 100%;
+    user-select: none;
   }
   .bot:hover { border-color: var(--dim2); }
   .bot.active { border-color: var(--accent); background: var(--card2); }
@@ -71,6 +76,14 @@
   .bot .row { margin-top: 9px; display: flex; gap: 16px; align-items: baseline; }
   .bot .big { font-size: 20px; font-weight: 600; }
   .bot .small { color: var(--dim); font-size: 12px; }
+  /* Версии ТС. Каждая — отдельный бот со своим журналом; активная подсвечена. */
+  .chips { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .chip {
+    padding: 2px 9px; border-radius: 6px; font-size: 11.5px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--dim);
+  }
+  .chip:hover { border-color: var(--dim2); color: var(--fg); }
+  .chip.on { border-color: var(--accent); color: var(--accent); background: var(--card2); }
 
   .cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); margin-bottom: 22px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
@@ -138,6 +151,7 @@
 <body>
 <header>
   <h1>Трейдинг-боты</h1>
+  <span class="sub" id="activeName"></span>
   <span class="sub" id="status"><span class="dot down"></span>подключение…</span>
   <span class="spacer"></span>
   <button id="pause" title="Пауза автообновления">⏸ пауза</button>
@@ -208,44 +222,92 @@
 "use strict";
 
 // Боты. Порядок здесь = порядок вкладок на странице.
+//
+// У каждой ТС свой список версий, и каждая версия — отдельный под со своим
+// журналом: выкатывая новую, старую не выключают, они торгуют параллельно и
+// их можно сравнить. `id` версии должен совпадать с именем бота в
+// infrastructure/k8s/base/tradingbot-chart/values.yaml и с роутом в nginx.conf.
+//
+// Добавить версию = дописать элемент в versions (первый в списке считается
+// основным и открывается по умолчанию).
 const BOTS = [
   {
     id: "impulse",
     name: "Импульс истощения",
     desc: "шорт на альткоине, у которого выдохся резкий рост",
+    versions: [{ v: "0.1", id: "impulse-v0-1" }],
   },
   {
     id: "density",
     name: "Плотности в стакане",
     desc: "лимитка перед крупной заявкой, выход когда её съели",
+    versions: [{ v: "0.1", id: "density-v0-1" }],
   },
   {
     id: "breakout",
     name: "Пробой уровня",
     desc: "лонг по активности у явного уровня, выход когда она упала",
+    versions: [{ v: "0.1", id: "breakout-v0-1" }],
   },
   {
     id: "btc",
     name: "Биткоин",
     desc: "лонг на просадке BTC от поддержки, тейк +5$ / стоп −2$",
+    versions: [{ v: "0.1", id: "btc-v0-1" }],
   },
 ];
 
 const REFRESH_MS = 5000;
 const STORE_KEY = "tb.bot";
+const STORE_VERSIONS = "tb.versions";
 
-// Активная вкладка переживает перезагрузку страницы: смотреть за одним ботом
-// обычно приходится подряд, и каждый раз выбирать его заново — раздражает.
-// Приоритет у адреса (/tb#density), чтобы на конкретного бота можно было
-// дать ссылку; иначе берём последний выбор этого браузера.
-const known = id => BOTS.some(b => b.id === id);
+const bot = id => BOTS.find(b => b.id === id);
+const known = id => Boolean(bot(id));
+
+// Выбранная версия каждой ТС. Хранится отдельно от активной вкладки: если
+// смотреть 0.2 у пробоя, а потом уйти на другую ТС и вернуться — должна
+// открыться снова 0.2, а не сброситься на первую.
+const chosen = Object.create(null);
+for (const b of BOTS) chosen[b.id] = b.versions[0].id;
+
+// Активная вкладка и версии переживают перезагрузку страницы: смотреть за
+// одним ботом обычно приходится подряд, и каждый раз выбирать заново — лишнее.
+// Приоритет у адреса (/tb#breakout или /tb#breakout-v0-1), чтобы на конкретную
+// версию можно было дать ссылку.
 let active = BOTS[0].id;
 try {
   const saved = localStorage.getItem(STORE_KEY);
   if (saved && known(saved)) active = saved;
+  const savedVersions = JSON.parse(localStorage.getItem(STORE_VERSIONS) || "{}");
+  for (const b of BOTS) {
+    if (b.versions.some(v => v.id === savedVersions[b.id])) chosen[b.id] = savedVersions[b.id];
+  }
 } catch (e) { /* приватный режим — переживём */ }
+
 const fromHash = location.hash.replace("#", "");
-if (known(fromHash)) active = fromHash;
+if (known(fromHash)) {
+  active = fromHash;
+} else if (fromHash) {
+  // В адресе может стоять конкретная версия: #breakout-v0-1.
+  for (const b of BOTS) {
+    if (b.versions.some(v => v.id === fromHash)) {
+      active = b.id;
+      chosen[b.id] = fromHash;
+      break;
+    }
+  }
+}
+
+// Идентификатор бота, чьи данные показываем: ТС + выбранная версия.
+const currentId = (botId = active) => chosen[botId];
+const versionOf = botId => (bot(botId).versions.find(v => v.id === chosen[botId]) || {}).v || "";
+
+function saveChoice() {
+  try {
+    localStorage.setItem(STORE_KEY, active);
+    localStorage.setItem(STORE_VERSIONS, JSON.stringify(chosen));
+  } catch (e) { /* не критично */ }
+}
 
 // botId -> { state, trades, ok, error }
 const data = Object.create(null);
@@ -261,8 +323,6 @@ const price = v => { const x = Number(v); if (!Number.isFinite(x)) return esc(v)
 const money = (v, d = 2) => (n(v) >= 0 ? "+" : "−") + Math.abs(n(v)).toFixed(d);
 const cls = v => (n(v) >= 0 ? "pos" : "neg");
 const usd = v => n(v).toLocaleString("ru-RU", { maximumFractionDigits: 0 }) + "$";
-const bot = id => BOTS.find(b => b.id === id);
-
 async function get(botId, path) {
   const r = await fetch(`/tb/api/${botId}${path}`, { cache: "no-store" });
   if (!r.ok) throw new Error(path + " -> " + r.status);
@@ -308,7 +368,7 @@ function summarize(trades) {
 
 function renderBots() {
   document.getElementById("bots").innerHTML = BOTS.map(b => {
-    const d = data[b.id];
+    const d = data[currentId(b.id)];
     let line;
     if (!d) {
       line = '<span class="small">загрузка…</span>';
@@ -321,21 +381,30 @@ function renderBots() {
               · открыто ${(d.state.open_positions || []).length}</span>`;
     }
     const dot = !d ? "down" : d.ok ? "ok" : "down";
-    return `<button class="bot ${b.id === active ? "active" : ""}" data-bot="${b.id}">
+    // Чипы версий. Их видно всегда, даже когда версия одна: так понятно, что
+    // у ТС вообще есть версии, и куда добавится следующая.
+    const chips = b.versions.map(v => {
+      const vd = data[v.id];
+      // Итог версии прямо на чипе — сравнение не требует переключения.
+      const tip = vd && vd.ok ? `${money(summarize(vd.trades).net)}$` : "";
+      return `<span class="chip ${v.id === chosen[b.id] ? "on" : ""}" data-version="${v.id}"
+                    data-bot="${b.id}" title="версия ${esc(v.v)}${tip ? ": " + tip : ""}">
+                v${esc(v.v)}</span>`;
+    }).join("");
+    return `<div class="bot ${b.id === active ? "active" : ""}" data-bot="${b.id}">
       <div class="title"><span class="dot ${dot}"></span>${esc(b.name)}</div>
       <div class="desc">${esc(b.desc)}</div>
       <div class="row">${line}</div>
-    </button>`;
+      <div class="chips">${chips}</div>
+    </div>`;
   }).join("");
 }
 
-function switchTo(id) {
-  if (!known(id) || id === active) return;
-  active = id;
-  try { localStorage.setItem(STORE_KEY, active); } catch (err) { /* не критично */ }
+function applySwitch() {
+  saveChoice();
   // replaceState, а не присваивание hash: переключение вкладок не должно
   // засорять историю браузера — «назад» уводил бы со страницы через раз.
-  history.replaceState(null, "", "#" + active);
+  history.replaceState(null, "", "#" + currentId());
   // Фильтры таблицы относятся к прошлому боту — сбрасываем, иначе новая
   // вкладка откроется с непонятно откуда взявшимся поиском.
   document.getElementById("q").value = "";
@@ -345,11 +414,38 @@ function switchTo(id) {
   refresh();
 }
 
+function switchTo(id) {
+  if (!known(id) || id === active) return;
+  active = id;
+  applySwitch();
+}
+
+function switchVersion(botId, versionId) {
+  const b = bot(botId);
+  if (!b || !b.versions.some(v => v.id === versionId)) return;
+  if (chosen[botId] === versionId && botId === active) return;
+  chosen[botId] = versionId;
+  active = botId;
+  applySwitch();
+}
+
 document.getElementById("bots").addEventListener("click", e => {
+  const chip = e.target.closest("[data-version]");
+  if (chip) {
+    switchVersion(chip.dataset.bot, chip.dataset.version);
+    return;
+  }
   const el = e.target.closest("[data-bot]");
   if (el) switchTo(el.dataset.bot);
 });
-window.addEventListener("hashchange", () => switchTo(location.hash.replace("#", "")));
+
+window.addEventListener("hashchange", () => {
+  const hash = location.hash.replace("#", "");
+  if (known(hash)) { switchTo(hash); return; }
+  for (const b of BOTS) {
+    if (b.versions.some(v => v.id === hash)) { switchVersion(b.id, hash); return; }
+  }
+});
 
 // ---- карточки статистики ---------------------------------------------------
 
@@ -498,7 +594,7 @@ function renderOpen(state) {
 let sort = { key: "num", desc: true };
 
 function visibleTrades() {
-  const all = (data[active] && data[active].trades) || [];
+  const all = (data[currentId()] && data[currentId()].trades) || [];
   const q = document.getElementById("q").value.trim().toUpperCase();
   const f = document.getElementById("filter").value;
   let rows = all.filter(t => {
@@ -521,7 +617,7 @@ function visibleTrades() {
 }
 
 function renderTrades() {
-  const all = (data[active] && data[active].trades) || [];
+  const all = (data[currentId()] && data[currentId()].trades) || [];
   const rows = visibleTrades();
   const sum = rows.reduce((a, t) => a + n(t.profit_usd), 0);
   document.getElementById("tradeCount").innerHTML = all.length
@@ -611,13 +707,14 @@ function renderStatus(state) {
 }
 
 function renderActive() {
-  document.getElementById("csv").href = `/tb/${active}/trades.csv`;
-  const d = data[active];
+  document.getElementById("csv").href = `/tb/${currentId()}/trades.csv`;
+  const d = data[currentId()];
   const banner = document.getElementById("banner");
   if (!d || !d.ok) {
     if (d) {
       setStatus("down", "бот недоступен");
-      banner.textContent = `Не удалось получить данные бота «${bot(active).name}» (${d.error}). ` +
+      banner.textContent = `Не удалось получить данные бота «${bot(active).name}» ` +
+        `v${versionOf(active)} (${d.error}). ` +
         "Похоже, его под не запущен — данные ниже могли устареть.";
       banner.classList.add("show");
     }
@@ -625,6 +722,8 @@ function renderActive() {
   }
   banner.classList.remove("show");
   renderStatus(d.state);
+  document.getElementById("activeName").textContent =
+    `${bot(active).name} · v${versionOf(active)}`;
   renderCards(d.state, d.trades);
   renderCurve(d.trades);
   renderPending(d.state);
@@ -645,18 +744,18 @@ function renderActive() {
   if (stick) pre.scrollTop = pre.scrollHeight;
 }
 
-async function loadBot(b) {
-  // Состояние и сделки тянем по всем ботам — из них считается сравнение
-  // во вкладках. Лог и сигналы весят больше и нужны только открытому боту.
-  const isActive = b.id === active;
+async function loadBot(id) {
+  // Состояние и сделки тянем по КАЖДОЙ версии — из них считается сравнение
+  // на чипах. Лог и сигналы весят больше и нужны только открытой версии.
+  const isActive = id === currentId();
   try {
     const [state, trades, signals, log] = await Promise.all([
-      get(b.id, "/state"),
-      get(b.id, "/trades?limit=2000"),
-      isActive ? get(b.id, "/signals?limit=200") : Promise.resolve([]),
-      isActive ? get(b.id, "/log?lines=200") : Promise.resolve([]),
+      get(id, "/state"),
+      get(id, "/trades?limit=2000"),
+      isActive ? get(id, "/signals?limit=200") : Promise.resolve([]),
+      isActive ? get(id, "/log?lines=200") : Promise.resolve([]),
     ]);
-    data[b.id] = {
+    data[id] = {
       ok: true,
       state: state || {},
       trades: Array.isArray(trades) ? trades : [],
@@ -666,12 +765,13 @@ async function loadBot(b) {
   } catch (err) {
     // Один упавший бот не должен гасить панель целиком: его вкладка
     // покажет «недоступен», остальные продолжат обновляться.
-    data[b.id] = { ok: false, error: err.message, state: {}, trades: [], signals: [], log: [] };
+    data[id] = { ok: false, error: err.message, state: {}, trades: [], signals: [], log: [] };
   }
 }
 
 async function refresh() {
-  await Promise.all(BOTS.map(loadBot));
+  const ids = BOTS.flatMap(b => b.versions.map(v => v.id));
+  await Promise.all(ids.map(loadBot));
   renderBots();
   renderActive();
 }

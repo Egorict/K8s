@@ -17,7 +17,7 @@ from .exchange import BybitPublic
 from .journal import Journal
 from .models import Candle, Ticker
 from .orderbook import BookManager
-from .paper import PaperBroker
+from .paper import PaperBroker, fmt_profit_factor
 from .scanner import Candidate, Scanner
 from .strategy import build_setup, find_impulse
 
@@ -159,7 +159,9 @@ class Engine:
         while self._running:
             await asyncio.sleep(interval)
             stats = self.broker.stats()
-            self.journal.save_state(list(self.broker.positions.values()), stats, list(self.watchlist))
+            self.journal.save_state(list(self.broker.positions.values()), stats,
+                                    list(self.watchlist), strategy="impulse",
+                                    version=self.cfg.version)
             log.info(
                 "СТАТУС | наблюдаю %d монет, горячих %d | сделок %d (W%d/L%d, winrate %.0f%%) "
                 "| открыто %d | итог %+.2f$",
@@ -201,8 +203,8 @@ class Engine:
         log.info("ИТОГ ДЕМО-СЕССИИ")
         log.info("  сделок: %d | прибыльных: %d | убыточных: %d | winrate: %.1f%%",
                  stats["trades"], stats["wins"], stats["losses"], stats["winrate"])
-        log.info("  средняя прибыль: %+.2f$ | средний убыток: %+.2f$ | профит-фактор: %.2f",
-                 stats["avg_win"], stats["avg_loss"], stats["profit_factor"])
+        log.info("  средняя прибыль: %+.2f$ | средний убыток: %+.2f$ | профит-фактор: %s",
+                 stats["avg_win"], stats["avg_loss"], fmt_profit_factor(stats["profit_factor"]))
         log.info("  чистый результат: %+.2f$", stats["net_pnl_usd"])
         log.info("  открытых позиций осталось: %d", stats["open"])
         log.info("  журнал сделок: %s", self.cfg.trades_csv)

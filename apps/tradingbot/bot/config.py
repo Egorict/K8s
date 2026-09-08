@@ -437,6 +437,12 @@ class Config:
     # а в кластере это просто разные поды со своими томами.
     strategy: str = os.environ.get("BOT_STRATEGY", "impulse")
 
+    # Версия ТС из реестра bot/versions.py. Пусто = последняя из реестра.
+    # Версия задаёт отличия от параметров ниже, поэтому в кластере она указана
+    # явно: иначе выкладка новой версии молча поменяла бы поведение старого
+    # пода, и сравнивать было бы нечего.
+    version: str = os.environ.get("BOT_VERSION", "")
+
     screener: ScreenerConfig = field(default_factory=ScreenerConfig)
     impulse: ImpulseConfig = field(default_factory=ImpulseConfig)
     entry: EntryConfig = field(default_factory=EntryConfig)

@@ -16,6 +16,7 @@ import csv
 import io
 import json
 import logging
+import math
 import os
 from typing import Dict, List
 
@@ -24,6 +25,21 @@ from aiohttp import web
 from .config import Config
 
 log = logging.getLogger("web")
+
+
+def _finite(value):
+    """inf и nan -> None: в JSON таких литералов нет, браузер на них падает."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(v) for v in value]
+    return value
+
+
+def _safe_dumps(obj) -> str:
+    return json.dumps(_finite(obj), ensure_ascii=False, allow_nan=False)
 
 
 def _read_csv(path: str, limit: int) -> List[Dict[str, str]]:
@@ -58,7 +74,11 @@ def build_app(cfg: Config) -> web.Application:
         return web.Response(text=DASHBOARD_HTML, content_type="text/html", charset="utf-8")
 
     async def api_state(_request: web.Request) -> web.Response:
-        return web.json_response(_read_json(cfg.state_json))
+        # dumps=_safe_dumps, а не дефолтный: state.json на томе мог быть записан
+        # старой версией бота, которая клала туда Infinity. Python такой файл
+        # читает молча, а браузер на JSON.parse падает - и панель показывает
+        # живого бота как недоступного.
+        return web.json_response(_read_json(cfg.state_json), dumps=_safe_dumps)
 
     async def api_trades(request: web.Request) -> web.Response:
         limit = min(int(request.query.get("limit", 200)), 2000)

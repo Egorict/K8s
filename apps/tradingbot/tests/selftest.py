@@ -10,7 +10,7 @@ import time
 from typing import List
 
 from bot.config import Config
-from bot.models import Candle, Level, Ticker, TradePrint
+from bot.models import Candle, Level, PlainSetup, Ticker, TradePrint
 from bot.orderbook import BookTracker
 from bot.paper import PaperBroker
 from bot.strategy import build_setup, find_impulse, find_stall
@@ -140,6 +140,12 @@ def run_selftest(cfg: Config) -> None:
 
     # --- 8. ТС биткоина ------------------------------------------------------
     results.extend(run_btc_selftest(cfg))
+
+    # --- 9. Журнал: state.json обязан быть валидным JSON ---------------------
+    results.extend(run_json_selftest(cfg))
+
+    # --- 10. Реестр версий ---------------------------------------------------
+    results.extend(run_versions_selftest(cfg))
 
     passed = sum(1 for r in results if r)
     print(f"\nИтог: {passed}/{len(results)} проверок пройдено")
@@ -633,4 +639,159 @@ def run_btc_selftest(cfg: Config) -> List[bool]:
                               stop_reason or "нет"))
     finally:
         cfg.data_dir = original_dir
+    return results
+
+
+def run_json_selftest(cfg: Config) -> List[bool]:
+    """state.json обязан быть валидным JSON при любых значениях статистики.
+
+    Регрессия 08.09.2026: при прибыльных сделках без единого убытка
+    profit_factor становился float("inf"), json.dump писал литерал Infinity,
+    и панель падала на JSON.parse, показывая живого бота как недоступного.
+    Стандартной библиотеке Python такой файл читать не мешает - поэтому
+    проверять надо строгим парсером, а не json.load.
+    """
+    import json
+    import tempfile
+
+    from bot.journal import Journal
+    from bot.paper import PaperBroker, fmt_profit_factor
+
+    print("\nЖурнал: валидность state.json")
+    results: List[bool] = []
+
+    original_dir = cfg.data_dir
+    cfg.data_dir = tempfile.mkdtemp(prefix="selftest-json-")
+    try:
+        broker = PaperBroker(cfg)
+        # Сделка в плюс и ни одной в минус - тот самый случай.
+        setup = PlainSetup(symbol="TESTUSDT", side="long", price=100.0, timeframe="5",
+                           score=0.7, ticker=Ticker(symbol="TESTUSDT", last_price=100.0,
+                                                    change_24h=0.05, turnover_24h=1e8,
+                                                    volume_24h=1e6))
+        position = broker.open_market(setup, stop_usd=2.0, take_usd=5.0)
+        broker.close(position, position.take_price, "тейк-профит")
+
+        stats = broker.stats()
+        results.append(_check("без убытков профит-фактор не бесконечность",
+                              stats["profit_factor"] is None,
+                              repr(stats["profit_factor"])))
+        results.append(_check("профит-фактор для лога форматируется",
+                              fmt_profit_factor(stats["profit_factor"]) == "∞",
+                              fmt_profit_factor(stats["profit_factor"])))
+
+        journal = Journal(cfg.trades_csv, cfg.signals_csv, cfg.state_json)
+        journal.save_state(list(broker.positions.values()), stats, ["TESTUSDT"],
+                           strategy="selftest")
+        raw = open(cfg.state_json, encoding="utf-8").read()
+        results.append(_check("в файле нет литерала Infinity",
+                              "Infinity" not in raw and "NaN" not in raw))
+        # parse_constant срабатывает ровно на Infinity/-Infinity/NaN - то есть
+        # ведёт себя как строгий парсер браузера, в отличие от json.load.
+        try:
+            json.loads(raw, parse_constant=lambda c: (_ for _ in ()).throw(
+                ValueError(f"недопустимая константа {c}")))
+            strict_ok, detail = True, "разобран строгим парсером"
+        except ValueError as exc:
+            strict_ok, detail = False, str(exc)
+        results.append(_check("state.json проходит строгий разбор", strict_ok, detail))
+
+        # Прямая защита _json_safe: любая бесконечность превращается в null.
+        from bot.journal import _json_safe
+        cleaned = _json_safe({"a": float("inf"), "b": [float("nan"), 1.5], "c": "ok"})
+        results.append(_check("_json_safe чистит inf и nan",
+                              cleaned == {"a": None, "b": [None, 1.5], "c": "ok"},
+                              repr(cleaned)))
+    finally:
+        cfg.data_dir = original_dir
+    return results
+
+
+def run_versions_selftest(cfg: Config) -> List[bool]:
+    """Реестр версий: у каждой ТС есть версии, overrides применяются, опечатки ловятся."""
+    import dataclasses
+
+    from bot import versions
+    from bot.config import Config as ConfigClass
+
+    print("\nВерсии торговых систем")
+    results: List[bool] = []
+
+    # У каждой ТС, которую умеет запускать run.py, должна быть хотя бы одна версия.
+    from run import DEFAULT_ENGINES
+    missing = [s for s in DEFAULT_ENGINES if not versions.available(s)]
+    results.append(_check("у каждой ТС есть версии", not missing,
+                          ", ".join(f"{s}: {versions.available(s)}" for s in DEFAULT_ENGINES)))
+
+    results.append(_check("версия по умолчанию - последняя",
+                          versions.latest("breakout") == versions.available("breakout")[-1],
+                          versions.latest("breakout")))
+
+    # Сортировка: 0.10 новее 0.9, хотя строкой это не так.
+    order = sorted(["0.1", "0.9", "0.10", "0.2"], key=versions._sort_key)
+    results.append(_check("версии сортируются по номеру, а не по строке",
+                          order == ["0.1", "0.2", "0.9", "0.10"], str(order)))
+
+    # Применение overrides: числа реально доезжают до конфига.
+    probe = ConfigClass()
+    original = probe.breakout.min_entry_score
+    versions.VERSIONS["breakout"]["9.9"] = versions.Version(
+        notes="временная версия для самопроверки",
+        overrides={"breakout": {"min_entry_score": 0.99},
+                   "risk": {"margin_usd": 33.0}},
+    )
+    try:
+        applied = versions.apply(probe, "breakout", "9.9")
+        results.append(_check("overrides применились к секции ТС",
+                              probe.breakout.min_entry_score == 0.99,
+                              f"{original} -> {probe.breakout.min_entry_score}"))
+        results.append(_check("overrides применились к общей секции риска",
+                              probe.risk.margin_usd == 33.0, f"{probe.risk.margin_usd}"))
+        results.append(_check("apply возвращает применённую версию", applied == "9.9", applied))
+
+        # Опечатка в имени параметра должна валить бота на старте, а не тихо
+        # проходить: иначе новая версия торговала бы ровно как предыдущая.
+        versions.VERSIONS["breakout"]["9.8"] = versions.Version(
+            overrides={"breakout": {"min_entry_scoer": 0.1}})
+        try:
+            versions.apply(ConfigClass(), "breakout", "9.8")
+            caught = False
+        except SystemExit:
+            caught = True
+        results.append(_check("опечатка в параметре версии ловится на старте", caught))
+
+        # Несуществующая версия - тоже явная ошибка.
+        try:
+            versions.apply(ConfigClass(), "breakout", "0.0")
+            caught_missing = False
+        except SystemExit:
+            caught_missing = True
+        results.append(_check("запрос несуществующей версии ловится", caught_missing))
+    finally:
+        versions.VERSIONS["breakout"].pop("9.9", None)
+        versions.VERSIONS["breakout"].pop("9.8", None)
+
+    # Базовая версия 0.1 ничего не меняет - она и есть текущее поведение кода.
+    base = ConfigClass()
+    before = dataclasses.asdict(base)
+    versions.apply(base, "breakout", "0.1")
+    results.append(_check("v0.1 не меняет базовый конфиг",
+                          dataclasses.asdict(base) == before))
+
+    # Версия попадает в state.json - панель показывает, чьи это цифры.
+    import json
+    import tempfile
+    from bot.journal import Journal
+
+    original_dir = cfg.data_dir
+    cfg.data_dir = tempfile.mkdtemp(prefix="selftest-versions-")
+    try:
+        journal = Journal(cfg.trades_csv, cfg.signals_csv, cfg.state_json)
+        journal.save_state([], {"trades": 0}, [], strategy="breakout", version="0.1")
+        payload = json.load(open(cfg.state_json, encoding="utf-8"))
+        results.append(_check("версия попадает в state.json",
+                              payload.get("version") == "0.1", repr(payload.get("version"))))
+    finally:
+        cfg.data_dir = original_dir
+
     return results

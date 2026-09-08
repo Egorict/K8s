@@ -16,6 +16,11 @@ from .models import ClosedTrade, OrderbookView, PendingOrder, PlainSetup, Positi
 log = logging.getLogger("paper")
 
 
+def fmt_profit_factor(value: Optional[float]) -> str:
+    """Профит-фактор для лога: None значит "убытков ещё не было"."""
+    return "∞" if value is None else f"{value:.2f}"
+
+
 class PaperBroker:
     """Держит демо-позиции и решает, когда их закрывать."""
 
@@ -361,6 +366,10 @@ class PaperBroker:
             "net_pnl_usd": self.equity_usd,
             "avg_win": (gross_win / len(wins)) if wins else 0.0,
             "avg_loss": (-gross_loss / len(losses)) if losses else 0.0,
-            "profit_factor": (gross_win / gross_loss) if gross_loss > 0 else float("inf") if gross_win else 0.0,
+            # None, а НЕ float("inf"), когда убытков ещё не было: json.dump
+            # пишет бесконечность как литерал Infinity, которого в JSON не
+            # существует, и панель падает на JSON.parse. None сериализуется в
+            # null, а "прибыль без убытков" читатель показывает как "∞" сам.
+            "profit_factor": (gross_win / gross_loss) if gross_loss > 0 else None,
             "open": len(self.positions),
         }

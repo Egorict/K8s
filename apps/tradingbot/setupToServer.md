@@ -274,14 +274,37 @@ bot/journal.py           то, что пишет данные, которые с
   850m/1152Mi запросов при квоте 1500m/1.5Gi: место ещё есть, но добавляя
   пятую ТС, сверьтесь с `infrastructure/k8s/argocd/namespace.yaml`.
 
+### Версии: один под на версию
+
+Под в кластере — это не «ТС», а **ТС конкретной версии**: `tradingbot-breakout-v0-1`
+со своим PVC `tradingbot-breakout-v0-1-data`. Поэтому выкладка новой версии
+ничего не выключает — рядом просто появляется ещё один под, а старый продолжает
+торговать на своём журнале. Сравнение двух версий на одном и том же рынке —
+единственный способ понять, стала ли ТС лучше.
+
+Точка в именах Service и в URL запрещена, отсюда `v0-1`, а не `v0.1`.
+Версия передаётся поду двумя способами сразу — ключом `--version` в `args` и
+переменной `BOT_VERSION`, чтобы правка одного не меняла поведение молча.
+
+### Как выкатить новую версию (старая продолжит работать)
+
+1. `apps/tradingbot/bot/versions.py` — описать версию (отличия от базового
+   конфига, при необходимости свой движок);
+2. **добавить**, не заменяя, элемент в `bots[]` в
+   `infrastructure/k8s/base/tradingbot-chart/values.yaml`;
+3. роут `/tb/api/<тс>-v<версия>/` в `apps/client/nginx.conf`;
+4. элемент в `versions` нужной ТС в `apps/client/html/tb.html`.
+
+Старую версию убирают, когда сравнение закончено: удалить её элемент из
+`bots[]`, а затем руками её PVC — у него `resource-policy: keep`, ArgoCD его
+не тронет.
+
 ### Как добавить ещё одну ТС
 
-Три места, все рядом:
-
-1. `apps/tradingbot/bot/<своя>.py` + ветка в `run.py: _make_engine()` и значение
-   в `--strategy`;
-2. элемент в `bots[]` в `infrastructure/k8s/base/tradingbot-chart/values.yaml`
-   (появятся Deployment, Service и PVC) и роут в `apps/client/nginx.conf`;
+1. `apps/tradingbot/bot/<своя>.py`, запись в `DEFAULT_ENGINES` в `run.py`,
+   значение в `--strategy` и версия `0.1` в `bot/versions.py`;
+2. элемент в `bots[]` (появятся Deployment, Service и PVC) и роут в
+   `apps/client/nginx.conf`;
 3. элемент в `BOTS` в `apps/client/html/tb.html` — вкладка появится сама.
 
 Полезное:
