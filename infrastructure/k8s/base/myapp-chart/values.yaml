@@ -1,7 +1,7 @@
 replicaCount: 1
 image:
   repository: ermakov880/devops-project
-  tag: f310074cd7e33502ccc01beebbb3b9af6c6faeeb
+  tag: 71e5e5cf8281e29e2d7fae22231d305bc35da5e3
   # IfNotPresent, а не Always: CI деплоит по неизменяемому тегу — git SHA
   # (см. deploy.yaml, шаг "Update values.yaml files with new tag"). Такой тег
   # однозначно определяет содержимое образа, поэтому перепроверять реестр при
