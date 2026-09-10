@@ -21,6 +21,46 @@ def fmt_profit_factor(value: Optional[float]) -> str:
     return "∞" if value is None else f"{value:.2f}"
 
 
+# --------------------------------------------------------------- деньги сделки
+#
+# Три функции ниже - единственное место, где живёт арифметика сделки: уровни
+# стопа и тейка, комиссии и чистый PnL. Ими пользуются и живые ТС (методы
+# open_* ниже), и исторический реплей (bot/backtest.py). Держать их отдельно
+# важно ровно поэтому: если бы бэктест считал деньги своей копией формул,
+# любая правка комиссий разводила бы его с реальным ботом молча.
+
+
+def target_levels(side: str, price: float, qty: float, notional: float,
+                  stop_usd: float, take_usd: float,
+                  entry_fee: float, exit_fee: float) -> tuple:
+    """(стоп, тейк) по целям В ДЕНЬГАХ с уже заложенной комиссией круга.
+
+    Смысл: по стопу чистый убыток равен ровно stop_usd, по тейку чистая
+    прибыль - ровно take_usd. Поэтому комиссия входа и выхода прибавляется
+    к тейку и вычитается из стопа, а не учитывается "потом".
+    """
+    round_trip_fee = notional * (entry_fee + exit_fee)
+    take_move = (take_usd + round_trip_fee) / qty
+    stop_move = (stop_usd - round_trip_fee) / qty
+    if side == "long":
+        return price - stop_move, price + take_move
+    return price + stop_move, price - take_move
+
+
+def round_trip_fees(qty: float, entry_price: float, exit_price: float,
+                    entry_fee: float, exit_fee: float) -> float:
+    """Комиссия обеих сторон сделки, USD."""
+    return qty * (entry_price * entry_fee + exit_price * exit_fee)
+
+
+def net_pnl_usd(side: str, qty: float, entry_price: float, exit_price: float,
+                entry_fee: float, exit_fee: float) -> float:
+    """Чистый результат сделки, USD."""
+    gross = ((exit_price - entry_price) if side == "long"
+             else (entry_price - exit_price)) * qty
+    return gross - round_trip_fees(qty, entry_price, exit_price, entry_fee, exit_fee)
+
+
 class PaperBroker:
     """Держит демо-позиции и решает, когда их закрывать."""
 
@@ -51,9 +91,9 @@ class PaperBroker:
 
         # Комиссию тейкера за вход и выход закладываем в уровни, чтобы
         # чистый убыток по стопу был ровно stop_loss_usd, а прибыль по тейку - take_profit_usd.
-        round_trip_fee = notional * risk.taker_fee * 2
-        stop_move = (risk.stop_loss_usd - round_trip_fee) / qty
-        take_move = (risk.take_profit_usd + round_trip_fee) / qty
+        stop_price, take_price = target_levels(
+            "short", price, qty, notional,
+            risk.stop_loss_usd, risk.take_profit_usd, risk.taker_fee, risk.taker_fee)
 
         position = Position(
             trade_id=Position.new_id(),
@@ -62,8 +102,8 @@ class PaperBroker:
             timeframe=setup.primary_tf,
             qty=qty,
             entry_price=price,
-            stop_price=price + stop_move,
-            take_price=price - take_move,
+            stop_price=stop_price,
+            take_price=take_price,
             opened_at=time.time(),
             margin_usd=risk.margin_usd,
             leverage=risk.leverage,
@@ -117,18 +157,15 @@ class PaperBroker:
 
         # Уровни считаем от целей в деньгах, с уже учтённой комиссией круга
         # (вход + тейкер на выходе), чтобы +5$ были чистыми.
-        round_trip_fee = notional * (entry_fee + risk.taker_fee)
-        take_move = (dcfg.take_profit_usd + round_trip_fee) / qty
-        money_stop_move = (dcfg.stop_loss_usd - round_trip_fee) / qty
+        money_stop, take_price = target_levels(
+            setup.side, price, qty, notional,
+            dcfg.stop_loss_usd, dcfg.take_profit_usd, entry_fee, risk.taker_fee)
+        money_stop_move = abs(price - money_stop)
         # Второй стоп - за самой плотностью: если её прошли насквозь, идея сделки
         # умерла раньше, чем набежал денежный убыток. Берём тот, что ближе.
         wall_stop_move = abs(price - setup.wall.price) + price * dcfg.stop_beyond_wall_pct
         stop_move = min(money_stop_move, wall_stop_move)
-
-        if setup.side == "long":
-            stop_price, take_price = price - stop_move, price + take_move
-        else:
-            stop_price, take_price = price + stop_move, price - take_move
+        stop_price = price - stop_move if setup.side == "long" else price + stop_move
 
         position = Position(
             trade_id=Position.new_id(),
@@ -185,20 +222,12 @@ class PaperBroker:
         notional = risk.notional_usd
         qty = notional / price
 
-        round_trip_fee = notional * risk.taker_fee * 2
-        take_move = (take_usd + round_trip_fee) / qty
-        stop_move = (stop_usd - round_trip_fee) / qty
-
-        if setup.side == "long":
-            stop_price = price - stop_move
-            take_price = price + take_move
-            if stop_price_limit is not None:
-                stop_price = max(stop_price, stop_price_limit)
-        else:
-            stop_price = price + stop_move
-            take_price = price - take_move
-            if stop_price_limit is not None:
-                stop_price = min(stop_price, stop_price_limit)
+        stop_price, take_price = target_levels(
+            setup.side, price, qty, notional,
+            stop_usd, take_usd, risk.taker_fee, risk.taker_fee)
+        if stop_price_limit is not None:
+            stop_price = (max(stop_price, stop_price_limit) if setup.side == "long"
+                          else min(stop_price, stop_price_limit))
 
         position = Position(
             trade_id=Position.new_id(),
@@ -236,8 +265,8 @@ class PaperBroker:
     def _fees(self, position: Position, exit_price: float) -> float:
         # Ставки хранятся в самой позиции: у ТС импульса вход по рынку (тейкер),
         # у ТС плотностей - лимиткой (мейкер). Выход в обеих по рынку.
-        return position.qty * (position.entry_price * position.entry_fee_rate
-                               + exit_price * position.exit_fee_rate)
+        return round_trip_fees(position.qty, position.entry_price, exit_price,
+                               position.entry_fee_rate, position.exit_fee_rate)
 
     def track(self, position: Position, price: float) -> float:
         """Обновляет рантайм-метрики позиции и возвращает текущий PnL."""

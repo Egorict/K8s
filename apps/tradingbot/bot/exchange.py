@@ -138,12 +138,22 @@ class BybitPublic:
             low_24h=float(item.get("lowPrice24h") or 0.0),
         )
 
-    async def klines(self, symbol: str, interval: str, limit: int = 200) -> List[Candle]:
-        """Свечи от старых к новым. interval: '1', '5', '15', '60', 'D'."""
-        result = await self._get(
-            "/v5/market/kline",
-            {"category": self.category, "symbol": symbol, "interval": interval, "limit": limit},
-        )
+    async def klines(self, symbol: str, interval: str, limit: int = 200,
+                     start: Optional[int] = None, end: Optional[int] = None) -> List[Candle]:
+        """Свечи от старых к новым. interval: '1', '5', '15', '60', 'D'.
+
+        start/end - границы окна в миллисекундах. Живому боту они не нужны
+        (ему всегда нужен хвост истории), а бэктесту (bot/history.py) - да:
+        биржа отдаёт максимум 1000 свечей за запрос, и четыре месяца
+        пятиминуток выкачиваются страницами, сдвигая `end` в прошлое.
+        """
+        params = {"category": self.category, "symbol": symbol,
+                  "interval": interval, "limit": limit}
+        if start is not None:
+            params["start"] = int(start)
+        if end is not None:
+            params["end"] = int(end)
+        result = await self._get("/v5/market/kline", params)
         rows = result.get("list") or []
         candles: List[Candle] = []
         for row in rows:

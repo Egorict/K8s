@@ -3,12 +3,16 @@
   python run.py              - запустить демо-торговлю (реальные данные, фейковые сделки)
   python run.py --web        - то же + веб-панель на http://localhost:8080
   python run.py report       - краткая сводка по data/trades.csv
+  python run.py backtest     - прогнать ТС по прошедшей истории, помесячно
   python run.py selftest     - проверить стратегию на синтетических свечах (без сети)
 
 Ключи запуска (переопределяют config.py):
   --margin 20 --leverage 20 --stop 5 --take 15
   --min-change 0.10 --max-positions 3 --no-orderbook --debug
   --web --port 8080
+
+Ключи бэктеста:
+  --months 4 --symbols 0     (0 = все ликвидные монеты; 4 месяца - умолчание)
 """
 from __future__ import annotations
 
@@ -149,6 +153,49 @@ async def run_bot(cfg: Config) -> None:
                 await runner.cleanup()
 
 
+async def run_backtest_cli(cfg: Config, months: int, symbols: int) -> None:
+    """Прогон по истории из командной строки. Пишет тот же data/backtest.json,
+    который потом показывает панель."""
+    import json
+
+    from bot.backtest import BacktestParams, run_backtest
+
+    log = logging.getLogger("main")
+    params = BacktestParams(months=months, max_symbols=symbols)
+    log.info("Бэктест %s v%s: %d мес., монет %s, ТФ %s/%s. История кэшируется "
+             "в %s - первый прогон качает её целиком и идёт дольше остальных.",
+             cfg.strategy, cfg.version, months, symbols or "все",
+             params.fast_tf, params.slow_tf, cfg.history_dir)
+
+    async with BybitPublic(category=cfg.category) as client:
+        report_data = await run_backtest(cfg, client, params, cfg.history_dir)
+
+    with open(cfg.backtest_json, "w", encoding="utf-8") as fh:
+        json.dump(report_data, fh, ensure_ascii=False, indent=2, allow_nan=False)
+
+    total = report_data["total"]
+    print()
+    print(f"ТС {report_data['strategy']} v{report_data['version']} "
+          f"| достоверность: {report_data['fidelity']}")
+    print(f"Период: {report_data['params']['from']} .. {report_data['params']['to']} "
+          f"| монет: {report_data['params']['symbols']}")
+    for note in report_data["caveats"]:
+        print(f"  ! {note}")
+    print()
+    print(f"{'месяц':<9} {'сделок':>7} {'winrate':>8} {'итог, $':>10} "
+          f"{'накопл.':>10} {'BTC':>8}")
+    for m in report_data["months"]:
+        btc = m.get("btc") or {}
+        btc_txt = f"{btc.get('change_pct', 0):+.1f}%" if btc else "—"
+        print(f"{m['month']:<9} {m['trades']:>7} {m['winrate']:>7.1f}% "
+              f"{m['net_pnl_usd']:>+10.2f} {m['equity_usd']:>+10.2f} {btc_txt:>8}")
+    print()
+    print(f"Итого: {total['trades']} сделок, winrate {total['winrate']:.1f}%, "
+          f"результат {total['net_pnl_usd']:+.2f}$, "
+          f"просадка {total['max_drawdown_usd']:+.2f}$")
+    print(f"Отчёт: {cfg.backtest_json}")
+
+
 def report(cfg: Config) -> None:
     path = cfg.trades_csv
     if not os.path.exists(path):
@@ -178,7 +225,8 @@ def report(cfg: Config) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Демо-бот: шорт истощения импульса на альткоин-фьючерсах")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "report", "selftest"])
+    parser.add_argument("command", nargs="?", default="run",
+                        choices=["run", "report", "backtest", "selftest"])
     parser.add_argument("--margin", type=float, help="маржа на сделку, $ (по умолчанию 20)")
     parser.add_argument("--leverage", type=float, help="плечо (по умолчанию 20)")
     parser.add_argument("--stop", type=float, help="стоп-лосс в $ (по умолчанию 5)")
@@ -197,6 +245,10 @@ def main() -> None:
                                           "По умолчанию последняя из реестра")
     parser.add_argument("--versions", action="store_true",
                         help="показать список версий всех ТС и выйти")
+    parser.add_argument("--months", type=int,
+                        help="глубина бэктеста в месяцах (по умолчанию 4)")
+    parser.add_argument("--symbols", type=int,
+                        help="сколько монет брать в бэктест: 0 - все ликвидные")
     parser.add_argument("--debug", action="store_true", help="подробные логи")
     args = parser.parse_args()
 
@@ -221,6 +273,15 @@ def main() -> None:
 
     if args.command == "report":
         report(cfg)
+        return
+    if args.command == "backtest":
+        months = args.months if args.months is not None else cfg.backtest_months
+        symbols = args.symbols if args.symbols is not None else cfg.backtest_symbols
+        try:
+            asyncio.run(run_backtest_cli(cfg, months, symbols))
+        except KeyboardInterrupt:
+            print("Прервано. Скачанная история осталась в кэше - "
+                  "следующий запуск продолжит с неё.")
         return
     if args.command == "selftest":
         from tests.selftest import run_selftest

@@ -154,6 +154,9 @@ def run_selftest(cfg: Config) -> None:
     # --- 12. ТС плотностей, версия 0.2 ---------------------------------------
     results.extend(run_density_v2_selftest(cfg))
 
+    # --- 13. Бэктест: реплей истории -----------------------------------------
+    results.extend(run_backtest_selftest(cfg))
+
     passed = sum(1 for r in results if r)
     print(f"\nИтог: {passed}/{len(results)} проверок пройдено")
     if passed != len(results):
@@ -1128,4 +1131,197 @@ def run_density_v2_selftest(cfg: Config) -> List[bool]:
                               bool(reason) and "съедена" in (reason or ""), reason or "нет"))
     finally:
         cfg.data_dir = original_dir
+    return results
+
+
+# ---------------------------------------------------------------- бэктест
+#
+# Бэктест (bot/backtest.py) - это тот же разбор ТС, но по прошедшим свечам,
+# и ошибиться в нём легче всего двумя способами: подглядеть в будущее и
+# посчитать деньги не так, как их считает живой бот. Проверки ниже про это.
+
+def _bt_candles(flat: int = 340, impulse: int = 12, stall: int = 3,
+                after: int = 60, start: float = 1.0,
+                after_dir: float = -1.0) -> List[Candle]:
+    """5-минутки: ровный фон -> резкий рост -> затуп -> движение после входа.
+
+    after_dir < 0 - цена после входа падает (шорт ТС импульса доходит до
+    тейка), > 0 - растёт (шорт ловит стоп).
+    """
+    out: List[Candle] = []
+    ts = 1_700_000_000_000
+    price = start
+    step = 300_000
+
+    for _ in range(flat):
+        o = price
+        c = price * 1.0002
+        out.append(Candle(ts, o, max(o, c) * 1.0005, min(o, c) * 0.9995, c, 1000.0, 104_000.0))
+        price, ts = c, ts + step
+
+    for _ in range(impulse):
+        o = price
+        c = price * 1.013                       # +1.3% за свечу, без откатов
+        out.append(Candle(ts, o, c * 1.001, o * 0.9998, c, 4000.0, 420_000.0))
+        price, ts = c, ts + step
+
+    peak = price
+    for _ in range(stall):
+        o = price
+        c = price * 0.9996                      # рост встал, сверху тени
+        out.append(Candle(ts, o, peak * 1.0002, c * 0.9995, c, 700.0, 70_000.0))
+        price, ts = c, ts + step
+
+    for _ in range(after):
+        o = price
+        c = price * (1.0 + 0.004 * after_dir)
+        out.append(Candle(ts, o, max(o, c) * 1.0008, min(o, c) * 0.9992, c, 1500.0, 150_000.0))
+        price, ts = c, ts + step
+
+    return out
+
+
+def run_backtest_selftest(cfg: Config) -> List[bool]:
+    """Реплей истории: отсутствие подглядывания, деньги и портфельный лимит."""
+    from bot.backtest import (BacktestParams, DensityReplay, ImpulseReplay, PosState,
+                              SimTrade, apply_portfolio_limits, btc_by_month,
+                              month_series, proxy_activity, summarize, walk_position)
+    from bot.history import resample
+    from bot.paper import net_pnl_usd
+
+    results: List[bool] = []
+    print("\nБэктест: реплей истории")
+
+    params = BacktestParams(months=4)
+
+    # --- 1. Склейка 5m -> 15m не заглядывает вперёд ------------------------
+    candles = _bt_candles(flat=20, impulse=0, stall=0, after=0)
+    # Обрываем на середине 15-минутки: последняя крупная свеча обязана быть
+    # собрана только из прошедших пяти-минуток, а не взята готовой.
+    cut = 16                                     # 16 свечей = 5 полных 15m + 1
+    partial = resample(candles[:cut], "5", "15", until_ts=candles[cut - 1].ts)
+    expected_high = max(c.high for c in candles[15:cut])
+    results.append(_check("15m склеивается из 5m без заглядывания вперёд",
+                          abs(partial[-1].high - expected_high) < 1e-12
+                          and partial[-1].close == candles[cut - 1].close,
+                          f"{len(partial)} свечей, последняя из {cut - 15} пятиминуток"))
+    results.append(_check("склейка не берёт свечи позже момента решения",
+                          all(c.ts <= candles[cut - 1].ts for c in partial)))
+
+    # --- 2. Внутри свечи стоп считается раньше тейка ------------------------
+    state = PosState(side="short", qty=4.0, entry_price=100.0,
+                     stop_price=101.0, take_price=99.0,
+                     entry_fee=0.00055, exit_fee=0.00055,
+                     opened_idx=0, opened_ms=0, bar_minutes=5.0)
+    both = [Candle(0, 100.0, 100.0, 100.0, 100.0, 1.0),
+            Candle(1, 100.0, 101.5, 98.5, 100.0, 1.0)]   # свеча задела оба уровня
+    _, price, reason = walk_position(both, state)
+    results.append(_check("свеча задела и стоп, и тейк - засчитан стоп",
+                          reason == "стоп-лосс" and abs(price - 101.0) < 1e-9,
+                          f"{reason} @ {price}"))
+
+    state = PosState(side="short", qty=4.0, entry_price=100.0,
+                     stop_price=101.0, take_price=99.0,
+                     entry_fee=0.00055, exit_fee=0.00055,
+                     opened_idx=0, opened_ms=0, bar_minutes=5.0)
+    only_take = [Candle(0, 100.0, 100.0, 100.0, 100.0, 1.0),
+                 Candle(1, 100.0, 100.2, 98.5, 98.8, 1.0)]
+    _, price, reason = walk_position(only_take, state)
+    results.append(_check("тейк засчитывается, когда стоп не задет",
+                          reason == "тейк-профит" and abs(price - 99.0) < 1e-9,
+                          f"{reason} @ {price}"))
+
+    # --- 3. Деньги реплея = деньги живого бота ------------------------------
+    broker = PaperBroker(cfg)
+    setup = PlainSetup(symbol="TESTUSDT", side="long", price=100.0, timeframe="5",
+                       score=0.7, ticker=Ticker("TESTUSDT", 100.0, 0.2, 5e7, 1e6))
+    live = broker.open_market(setup, stop_usd=cfg.risk.stop_loss_usd,
+                              take_usd=cfg.risk.take_profit_usd)
+    replay = ImpulseReplay(cfg, params)
+    sim = replay.open_position("long", 100.0, 0, 0, 5.0,
+                               cfg.risk.stop_loss_usd, cfg.risk.take_profit_usd)
+    results.append(_check("стоп и тейк реплея совпадают с живым ботом",
+                          abs(sim.stop_price - live.stop_price) < 1e-9
+                          and abs(sim.take_price - live.take_price) < 1e-9,
+                          f"стоп {sim.stop_price:.6f}, тейк {sim.take_price:.6f}"))
+    take_pnl = net_pnl_usd("long", sim.qty, 100.0, sim.take_price,
+                           sim.entry_fee, sim.exit_fee)
+    stop_pnl = net_pnl_usd("long", sim.qty, 100.0, sim.stop_price,
+                           sim.entry_fee, sim.exit_fee)
+    results.append(_check(f"по тейку ровно +{cfg.risk.take_profit_usd:.0f}$ чистыми",
+                          abs(take_pnl - cfg.risk.take_profit_usd) < 0.01, f"{take_pnl:+.2f}$"))
+    results.append(_check(f"по стопу ровно -{cfg.risk.stop_loss_usd:.0f}$ чистыми",
+                          abs(stop_pnl + cfg.risk.stop_loss_usd) < 0.01, f"{stop_pnl:+.2f}$"))
+    broker.close(live, live.take_price, "тест")
+
+    # --- 4. Реплей ТС импульса находит сделку на синтетике -------------------
+    data = {"5": _bt_candles(after_dir=-1.0)}
+    trades = replay.run_symbol("TESTUSDT", data)
+    results.append(_check("реплей импульса открывает шорт на затухшем росте",
+                          len(trades) >= 1,
+                          f"{len(trades)} сделок" if trades else "ни одной"))
+    if trades:
+        t = trades[0]
+        results.append(_check("сделка шортовая и закрыта в плюс на падении",
+                              t.side == "short" and t.net_pnl_usd > 0,
+                              f"{t.side} {t.net_pnl_usd:+.2f}$ ({t.exit_reason})"))
+        results.append(_check("выход позже входа",
+                              t.closed_ms > t.opened_ms, f"{t.duration_min:.0f} мин"))
+
+    up = replay.run_symbol("TESTUSDT", {"5": _bt_candles(after_dir=1.0)})
+    results.append(_check("на продолжении роста тот же шорт ловит стоп",
+                          bool(up) and up[0].net_pnl_usd < 0,
+                          f"{up[0].net_pnl_usd:+.2f}$ ({up[0].exit_reason})" if up else "нет сделок"))
+
+    # --- 5. Портфельный лимит одновременных позиций -------------------------
+    def _t(symbol: str, start: int, end: int) -> SimTrade:
+        return SimTrade(symbol=symbol, side="short", timeframe="5", opened_ms=start,
+                        closed_ms=end, entry_price=1.0, exit_price=1.0, qty=1.0,
+                        net_pnl_usd=1.0, fees_usd=0.0, exit_reason="", entry_reason="",
+                        score=0.5)
+    overlapping = [_t("A", 0, 100), _t("B", 10, 100), _t("C", 20, 100), _t("D", 30, 100)]
+    kept = apply_portfolio_limits(list(overlapping), max_open=3)
+    results.append(_check("лимит одновременных позиций отбрасывает четвёртую",
+                          len(kept) == 3 and {t.symbol for t in kept} == {"A", "B", "C"},
+                          ", ".join(t.symbol for t in kept)))
+    sequential = [_t("A", 0, 10), _t("B", 20, 30), _t("C", 40, 50), _t("D", 60, 70)]
+    results.append(_check("непересекающиеся сделки лимит не трогает",
+                          len(apply_portfolio_limits(list(sequential), max_open=3)) == 4))
+
+    # --- 6. Помесячная разбивка и движение BTC ------------------------------
+    months = month_series(1_714_521_600_000, 1_725_148_800_000)   # май..сентябрь 2024
+    results.append(_check("месяцы периода идут подряд без пропусков",
+                          months == ["2024-05", "2024-06", "2024-07", "2024-08", "2024-09"],
+                          ", ".join(months)))
+    daily = [Candle(1_714_521_600_000, 60000.0, 62000.0, 59000.0, 61000.0, 1.0),
+             Candle(1_714_608_000_000, 61000.0, 66000.0, 60500.0, 66000.0, 1.0)]
+    btc = btc_by_month(daily)
+    results.append(_check("изменение BTC за месяц считается от первого открытия",
+                          abs(btc["2024-05"]["change_pct"] - 10.0) < 0.01,
+                          f"{btc['2024-05']['change_pct']:+.2f}%"))
+
+    stats = summarize([_t("A", 0, 1), _t("B", 0, 1)])
+    results.append(_check("сводка без убытков не отдаёт бесконечность",
+                          stats["profit_factor"] is None, str(stats["profit_factor"])))
+
+    # --- 7. Приближение активности и честная пометка density ----------------
+    b = cfg.breakout
+    hot = Candle(0, 100.0, 100.6, 99.6, 100.5, 1.0, b.min_volume_per_min * 15 * 4)
+    cold = Candle(0, 100.0, 100.05, 99.95, 99.96, 1.0, b.min_volume_per_min * 15 * 0.1)
+    hot_score, hot_ratio, _ = proxy_activity(hot, 100.0, b.min_volume_per_min, b)
+    cold_score, _, _ = proxy_activity(cold, 100.0, b.min_volume_per_min, b)
+    results.append(_check("оценка активности отличает кипящую свечу от вялой",
+                          hot_score > cold_score and hot_ratio > 1.0,
+                          f"{hot_score:.2f} против {cold_score:.2f}, фон x{hot_ratio:.1f}"))
+
+    density = DensityReplay(cfg, params)
+    results.append(_check("ТС плотностей помечена как непроверяемая на истории",
+                          density.fidelity == "none" and not density.symbols([])
+                          and bool(density.caveats),
+                          density.fidelity))
+
+    # --- 8. Реплей не трогает стакан ----------------------------------------
+    results.append(_check("реплей выключает стакан в своей копии конфига",
+                          not replay.cfg.orderbook.enabled and cfg.orderbook.enabled,
+                          "копия без стакана, оригинал не тронут"))
     return results

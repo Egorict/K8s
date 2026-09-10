@@ -535,6 +535,17 @@ class Config:
     # Каталог с данными. В контейнере сюда монтируется том: BOT_DATA_DIR=/data.
     data_dir: str = os.environ.get("BOT_DATA_DIR", "data")
 
+    # Бэктест (bot/backtest.py): прогон этой же ТС по прошедшей истории.
+    # Считается по команде (кнопкой в панели или `python run.py backtest`),
+    # результат лежит в data/backtest.json до следующего пересчёта.
+    #
+    # Значения ниже - умолчания для запуска из панели. Четыре месяца и все
+    # ликвидные монеты - это десятки тысяч запросов к бирже и минуты работы,
+    # поэтому и не считается само по расписанию.
+    backtest_months: int = int(os.environ.get("BOT_BACKTEST_MONTHS", "4"))
+    # 0 = все монеты, прошедшие фильтр ликвидности.
+    backtest_symbols: int = int(os.environ.get("BOT_BACKTEST_SYMBOLS", "0"))
+
     # Веб-панель с журналом торговли (bot/web.py).
     web_enabled: bool = os.environ.get("BOT_WEB", "0") == "1"
     web_host: str = os.environ.get("BOT_WEB_HOST", "0.0.0.0")
@@ -555,6 +566,16 @@ class Config:
     @property
     def log_file(self) -> str:
         return os.path.join(self.data_dir, "bot.log")
+
+    @property
+    def backtest_json(self) -> str:
+        return os.path.join(self.data_dir, "backtest.json")
+
+    @property
+    def history_dir(self) -> str:
+        """Кэш исторических свечей. Отдельный каталог - его можно снести
+        целиком, не задев журнал сделок."""
+        return os.path.join(self.data_dir, "history")
 
     def to_dict(self) -> dict:
         return asdict(self)

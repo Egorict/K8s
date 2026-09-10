@@ -19,6 +19,16 @@
   Добавить ТС или версию: элемент в BOTS ниже, роут в nginx.conf, элемент в
   bots[] в infrastructure/k8s/base/tradingbot-chart/values.yaml (и сама версия
   в apps/tradingbot/bot/versions.py).
+
+  У каждого бота две вкладки: «Торговля сейчас» — журнал живого демо-бота, и
+  «История по месяцам» — та же ТС, прогнанная по уже прошедшим свечам
+  (apps/tradingbot/bot/backtest.py), помесячно и рядом с движением биткоина.
+  Считает прогон сам бот у себя в поде, здесь только показ. Уровень
+  достоверности у ТС разный (стакана в истории не существует), и пометку о нём
+  прятать нельзя — см. FIDELITY ниже.
+
+  Новых роутов вкладка не требует: /tb/api/<бот>/ префиксный, и /backtest,
+  /backtest/run, /backtest/status уходят в под сами.
 -->
 <style>
   :root {
@@ -146,6 +156,44 @@
   details > summary::-webkit-details-marker { display: none; }
   .chev { color: var(--dim2); font-size: 11px; }
   .hidden { display: none; }
+
+  /* Переключатель «сейчас / история». Вкладка внутри вкладки бота: сверху
+     выбирают ТС, здесь — что про неё смотреть. */
+  .views { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  .views button { padding: 7px 14px; font-size: 13.5px; }
+
+  /* Пометка достоверности бэктеста. Цвет важнее текста: приближение и
+     «нельзя посчитать» не должны выглядеть как настоящий результат. */
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 6px; font-size: 11.5px;
+           border: 1px solid var(--line); }
+  .badge.full { color: var(--green); border-color: rgba(63,191,127,.45); }
+  .badge.approx { color: var(--warn); border-color: rgba(224,167,94,.45); }
+  .badge.none { color: var(--red); border-color: rgba(229,85,90,.45); }
+  .note {
+    margin-bottom: 16px; padding: 11px 14px; border-radius: 9px;
+    background: var(--card); border: 1px solid var(--line); color: var(--dim);
+    font-size: 12.5px; line-height: 1.6;
+  }
+  .note.warn { background: rgba(224,167,94,.08); border-color: rgba(224,167,94,.35); }
+  .note.stop { background: rgba(229,85,90,.08); border-color: rgba(229,85,90,.35); }
+  .note ul { margin: 7px 0 0; padding-left: 18px; }
+  .note li { margin: 3px 0; }
+
+  /* Столбики месяцев: результат ТС и движение BTC на одной шкале — так видно,
+     в каком рынке ТС зарабатывала. */
+  .bars { display: flex; align-items: flex-end; gap: 10px; padding: 14px; min-height: 190px; }
+  .bars .col { flex: 1 1 0; display: flex; flex-direction: column; align-items: center;
+               gap: 6px; min-width: 0; }
+  .bars .pair { display: flex; align-items: flex-end; gap: 3px; height: 130px; width: 100%;
+                justify-content: center; }
+  .bars .stick { width: 26px; border-radius: 3px 3px 0 0; min-height: 2px; }
+  .bars .stick.pnl { background: var(--green); }
+  .bars .stick.pnl.neg { background: var(--red); }
+  .bars .stick.btc { background: var(--dim2); opacity: .75; }
+  .bars .lbl { color: var(--dim2); font-size: 11px; white-space: nowrap; }
+  .mrow { cursor: pointer; }
+  .mrow.open { background: var(--card2); }
+  .sub-table td { padding-left: 26px; color: var(--dim); font-size: 12.5px; }
 </style>
 </head>
 <body>
@@ -163,6 +211,12 @@
 
   <div class="bots" id="bots"></div>
 
+  <div class="views">
+    <button id="viewLiveBtn" class="on">Торговля сейчас</button>
+    <button id="viewHistoryBtn">История по месяцам</button>
+  </div>
+
+  <div id="viewLive">
   <div class="cards" id="cards"></div>
 
   <section>
@@ -216,6 +270,44 @@
       <div class="panel"><pre id="log"></pre></div>
     </details>
   </section>
+  </div><!-- /viewLive -->
+
+  <!-- ================= История по месяцам (бэктест) ==================
+       Та же ТС, прогнанная по УЖЕ ПРОШЕДШИМ свечам: помесячный результат и
+       рядом движение биткоина за тот же месяц. Считает сам бот
+       (bot/backtest.py), результат лежит у него в data/backtest.json.
+       Здесь только показ. -->
+  <div id="viewHistory" class="hidden">
+    <div id="btNote"></div>
+
+    <div class="head" style="margin-bottom:14px">
+      <button id="btRun">Пересчитать</button>
+      <span class="count" id="btStatus"></span>
+    </div>
+
+    <div class="cards" id="btCards"></div>
+
+    <section>
+      <div class="head"><h2>Месяц за месяцем</h2>
+        <span class="count" id="btBarsNote"></span></div>
+      <div class="panel">
+        <div class="bars" id="btBars"></div>
+        <div class="legend" id="btBarsLegend"></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="head"><h2>Таблица месяцев</h2>
+        <span class="count">строку можно раскрыть — покажет сделки месяца</span></div>
+      <div class="panel scroll" id="btMonths"></div>
+    </section>
+
+    <section>
+      <div class="head"><h2>Условия прогона</h2></div>
+      <div class="panel"><div id="btParams" class="wrap"
+           style="padding:12px 14px;max-width:none"></div></div>
+    </section>
+  </div><!-- /viewHistory -->
 </main>
 
 <script>
@@ -691,6 +783,322 @@ function renderSignals(rows) {
     </tr>`);
 }
 
+// ---- история по месяцам (бэктест) ------------------------------------------
+//
+// Вторая вкладка каждого бота: та же ТС, прогнанная по прошедшим свечам.
+// Отличия от вкладки «сейчас»:
+//   * данные не тянутся каждые 5 секунд — отчёт меняется только после
+//     пересчёта, а весит он куда больше журнала;
+//   * пересчёт запускает сам бот у себя в поде и идёт минутами, поэтому
+//     кнопка «Пересчитать» опрашивает статус, а не ждёт ответа;
+//   * у каждой ТС свой уровень достоверности (см. bot/backtest.py) — он
+//     показан пометкой, и её нельзя прятать: у плотностей цифр нет вовсе,
+//     а у пробоя они приблизительные.
+
+const VIEW_KEY = "tb.view";
+let view = "live";
+try {
+  const savedView = localStorage.getItem(VIEW_KEY);
+  if (savedView === "history") view = savedView;
+} catch (e) { /* приватный режим */ }
+
+// botId -> { report, status, loading, error }
+const bt = Object.create(null);
+
+const FIDELITY = {
+  full: { label: "достоверно", cls: "full",
+          text: "ТС решает по свечам, и прогон вызывает её же функции разбора. " +
+                "Отличия от живого бота — только в частоте проверок." },
+  approx: { label: "приближение", cls: "approx",
+            text: "Часть входных данных ТС в истории не существует и заменена оценкой " +
+                  "по свечам. Цифры показывают порядок величины, а не то, что бот " +
+                  "сделал бы буквально." },
+  none: { label: "посчитать нельзя", cls: "none",
+          text: "Эту ТС на истории проверить нечем. Ниже — только движение биткоина " +
+                "по месяцам, чтобы был виден рынок того периода." },
+};
+
+function switchView(next) {
+  if (view === next) return;
+  view = next;
+  try { localStorage.setItem(VIEW_KEY, view); } catch (e) { /* не критично */ }
+  document.getElementById("viewLive").classList.toggle("hidden", view !== "live");
+  document.getElementById("viewHistory").classList.toggle("hidden", view !== "history");
+  document.getElementById("viewLiveBtn").classList.toggle("on", view === "live");
+  document.getElementById("viewHistoryBtn").classList.toggle("on", view === "history");
+  if (view === "history") loadBacktest(currentId());
+}
+
+document.getElementById("viewLiveBtn").addEventListener("click", () => switchView("live"));
+document.getElementById("viewHistoryBtn").addEventListener("click", () => switchView("history"));
+
+async function loadBacktest(id, force = false) {
+  const cached = bt[id];
+  // fetched, а не наличие отчёта: у бота, который бэктест ещё не считал,
+  // отчёта нет законно, и дёргать его каждые 5 секунд из renderActive незачем.
+  if (cached && !force && (cached.fetched || cached.loading)) { renderHistory(); return; }
+  bt[id] = { ...(cached || {}), loading: true };
+  renderHistory();
+  try {
+    const [report, status] = await Promise.all([
+      get(id, "/backtest"),
+      get(id, "/backtest/status").catch(() => ({})),
+    ]);
+    bt[id] = { report: report && report.months ? report : null, status,
+               loading: false, fetched: true, error: "" };
+    if (status && status.running) pollBacktest(id);
+  } catch (err) {
+    bt[id] = { report: null, status: {}, loading: false, fetched: true, error: err.message };
+  }
+  renderHistory();
+}
+
+// Пока прогон идёт, опрашиваем только статус — он маленький. Готовый отчёт
+// подтягиваем один раз, когда бот сообщил, что закончил.
+let btTimer = null;
+function pollBacktest(id) {
+  if (btTimer) return;
+  btTimer = setInterval(async () => {
+    let status;
+    try { status = await get(id, "/backtest/status"); }
+    catch (err) { clearInterval(btTimer); btTimer = null; return; }
+    bt[id] = { ...(bt[id] || {}), status };
+    if (!status.running) {
+      clearInterval(btTimer); btTimer = null;
+      await loadBacktest(id, true);
+      return;
+    }
+    if (view === "history" && id === currentId()) renderHistory();
+  }, 3000);
+}
+
+document.getElementById("btRun").addEventListener("click", async () => {
+  const id = currentId();
+  const btn = document.getElementById("btRun");
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/tb/api/${id}/backtest/run`, { method: "POST" });
+    const body = await r.json();
+    bt[id] = { ...(bt[id] || {}), status: body };
+    pollBacktest(id);
+  } catch (err) {
+    document.getElementById("btStatus").textContent = "не удалось запустить: " + err.message;
+  } finally {
+    btn.disabled = false;
+    renderHistory();
+  }
+});
+
+function renderBtNote(report, botId) {
+  const box = document.getElementById("btNote");
+  const level = FIDELITY[(report && report.fidelity) || "none"] || FIDELITY.none;
+  const caveats = (report && report.caveats) || [];
+  const cls = level.cls === "full" ? "" : level.cls === "approx" ? "warn" : "stop";
+  box.innerHTML = `<div class="note ${cls}">
+    <span class="badge ${level.cls}">${esc(level.label)}</span>
+    ${esc(level.text)}
+    ${caveats.length ? `<ul>${caveats.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
+  </div>`;
+}
+
+function renderBtCards(report) {
+  const box = document.getElementById("btCards");
+  if (!report) { box.innerHTML = ""; return; }
+  const t = report.total || {};
+  const p = report.params || {};
+  const withTrades = (report.months || []).filter(m => m.trades > 0).length;
+
+  // У ТС, которую на истории проверить нечем, нули по сделкам читались бы как
+  // «ничего не заработала» — а это не результат, а его отсутствие. Показываем
+  // то единственное, что здесь есть по существу: каким был рынок.
+  if (report.fidelity === "none") {
+    const btcMonths = (report.months || []).map(m => m.btc).filter(Boolean);
+    const chg = btcMonths.map(b => n(b.change_pct));
+    const total = btcMonths.length
+      ? (btcMonths[btcMonths.length - 1].close / btcMonths[0].open - 1) * 100 : 0;
+    box.innerHTML = [
+      ["Сделок за период", "нет данных", "эту ТС на истории не проверить"],
+      ["BTC за период", `<span class="${cls(total)}">${money(total, 1)}%</span>`,
+        `${esc(p.from || "")} — ${esc(p.to || "")}`],
+      ["Лучший месяц BTC", `<span class="pos">${money(Math.max(0, ...chg), 1)}%</span>`,
+        "рынок рос сильнее всего"],
+      ["Худший месяц BTC", `<span class="neg">${money(Math.min(0, ...chg), 1)}%</span>`,
+        "рынок падал сильнее всего"],
+    ].map(([k, v, h]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>
+        <div class="h">${h}</div></div>`).join("");
+    return;
+  }
+
+  box.innerHTML = [
+    ["Итог за период, $", `<span class="${cls(t.net_pnl_usd)}">${money(t.net_pnl_usd)}</span>`,
+      `${esc(p.from || "")} — ${esc(p.to || "")}`],
+    ["Сделок", t.trades ?? 0, `${t.wins ?? 0} в плюс · ${t.losses ?? 0} в минус`],
+    ["Winrate", (t.winrate ?? 0).toFixed(1) + "%", "доля прибыльных"],
+    ["Профит-фактор", t.profit_factor == null ? (t.trades ? "∞" : "—") : t.profit_factor.toFixed(2),
+      "заработано / потеряно"],
+    ["Просадка, $", `<span class="neg">${money(t.max_drawdown_usd)}</span>`,
+      "худший провал накопленного итога"],
+    ["Прибыльных месяцев",
+      `${(report.months || []).filter(m => m.net_pnl_usd > 0).length} из ${withTrades}`,
+      withTrades ? "из месяцев, в которых были сделки" : "сделок не было ни в одном месяце"],
+  ].map(([k, v, h]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>
+      <div class="h">${h}</div></div>`).join("");
+}
+
+function renderBtBars(months, onlyBtc = false) {
+  const box = document.getElementById("btBars");
+  const note = document.getElementById("btBarsNote");
+  if (!months.length) { box.innerHTML = '<div class="empty">нет данных</div>'; note.textContent = ""; return; }
+  // Две независимые шкалы: доллары ТС и проценты BTC. Общая была бы враньём —
+  // это разные величины, и связывать их высотой столбиков нельзя.
+  const maxPnl = Math.max(1, ...months.map(m => Math.abs(n(m.net_pnl_usd))));
+  const maxBtc = Math.max(1, ...months.map(m => Math.abs(n((m.btc || {}).change_pct))));
+  box.innerHTML = months.map(m => {
+    const pnl = n(m.net_pnl_usd);
+    const btcPct = n((m.btc || {}).change_pct);
+    const h1 = Math.max(2, (Math.abs(pnl) / maxPnl) * 118);
+    const h2 = Math.max(2, (Math.abs(btcPct) / maxBtc) * 118);
+    return `<div class="col" title="${esc(m.month)}: ${onlyBtc ? "" : `ТС ${money(pnl)}$, `}BTC ${money(btcPct, 1)}%">
+      <div class="pair">
+        ${onlyBtc ? "" : `<div class="stick pnl ${pnl < 0 ? "neg" : ""}"
+           style="height:${h1.toFixed(0)}px"></div>`}
+        <div class="stick btc" style="height:${h2.toFixed(0)}px"></div>
+      </div>
+      ${onlyBtc ? "" : `<div class="lbl ${cls(pnl)}">${money(pnl, 0)}$</div>`}
+      <div class="lbl">${money(btcPct, 0)}%</div>
+      <div class="lbl">${esc(m.month)}</div>
+    </div>`;
+  }).join("");
+  note.textContent = `${months.length} мес.`;
+}
+
+// Раскрытые месяцы. Хранится вне рендера: перерисовка не должна схлопывать
+// то, что пользователь только что открыл.
+const btOpen = new Set();
+
+function renderBtMonths(report) {
+  const box = document.getElementById("btMonths");
+  const months = (report && report.months) || [];
+  if (!months.length) {
+    box.innerHTML = '<div class="empty">отчёта ещё нет — нажмите «Пересчитать»</div>';
+    return;
+  }
+  // У непроверяемой ТС колонки о сделках были бы шеренгой прочерков, за
+  // которой теряется единственное, что в отчёте есть, — рынок.
+  if (report.fidelity === "none") {
+    box.innerHTML = `<table><thead><tr><th class="no-sort">Месяц</th>
+      <th class="no-sort num">BTC за месяц</th><th class="no-sort num">Максимум</th>
+      <th class="no-sort num">Минимум</th></tr></thead><tbody>${months.map(m => {
+        const b = m.btc;
+        return `<tr><td class="sym">${esc(m.month)}</td>
+          <td class="num ${b ? cls(b.change_pct) : ""}">${b ? money(b.change_pct, 1) + "%" : "нет данных"}</td>
+          <td class="num">${b ? price(b.high) : "—"}</td>
+          <td class="num">${b ? price(b.low) : "—"}</td></tr>`;
+      }).join("")}</tbody></table>`;
+    return;
+  }
+  const trades = (report.trades || []);
+  const cols = ["Месяц", "Сделок", "Winrate", "Итог, $", "Накопленный, $",
+                "Просадка, $", "Монет", "BTC за месяц"];
+  const rows = months.map(m => {
+    const btc = m.btc || null;
+    const open = btOpen.has(m.month);
+    const head = `<tr class="mrow ${open ? "open" : ""}" data-month="${esc(m.month)}">
+      <td class="sym">${open ? "▾" : "▸"} ${esc(m.month)}</td>
+      <td class="num">${m.trades}</td>
+      <td class="num">${m.trades ? m.winrate.toFixed(1) + "%" : "—"}</td>
+      <td class="num ${cls(m.net_pnl_usd)}">${m.trades ? money(m.net_pnl_usd) : "—"}</td>
+      <td class="num ${cls(m.equity_usd)}">${money(m.equity_usd)}</td>
+      <td class="num neg">${m.max_drawdown_usd ? money(m.max_drawdown_usd) : "—"}</td>
+      <td class="num">${m.symbols || "—"}</td>
+      <td class="num ${btc ? cls(btc.change_pct) : ""}">${btc ? money(btc.change_pct, 1) + "%" : "нет данных"}</td>
+    </tr>`;
+    if (!open) return head;
+    const mine = trades.filter(t => t.month === m.month);
+    const body = mine.length
+      ? mine.slice(0, 100).map(t => `<tr class="sub-table">
+          <td colspan="3">${esc(t.symbol)} · ${esc(t.side)} · ${esc(t.open_time)}</td>
+          <td class="num ${cls(t.profit_usd)}">${money(t.profit_usd)}</td>
+          <td colspan="4" class="wrap">${esc(t.exit_reason)}</td>
+        </tr>`).join("")
+      : `<tr class="sub-table"><td colspan="8">${m.trades
+          ? "сделки этого месяца не попали в отчёт: список ограничен свежими"
+          : "сделок не было"}</td></tr>`;
+    return head + body;
+  }).join("");
+  box.innerHTML = `<table><thead><tr>${cols.map((c, i) =>
+      `<th class="no-sort ${i ? "num" : ""}">${c}</th>`).join("")}</tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+document.getElementById("btMonths").addEventListener("click", e => {
+  const row = e.target.closest("[data-month]");
+  if (!row) return;
+  const month = row.dataset.month;
+  if (btOpen.has(month)) btOpen.delete(month); else btOpen.add(month);
+  renderHistory();
+});
+
+function renderBtParams(report) {
+  const box = document.getElementById("btParams");
+  if (!report) { box.innerHTML = '<span class="muted">прогона ещё не было</span>'; return; }
+  const p = report.params || {};
+  const mb = v => (n(v) / (1024 * 1024)).toFixed(1) + " МБ";
+  box.innerHTML = `
+    Период: <b>${esc(p.from)}</b> — <b>${esc(p.to)}</b> (${p.months} мес.) ·
+    монет: <b>${p.symbols}</b> · таймфреймы: <b>${(p.timeframes || []).join(" / ")}</b><br>
+    Размер сделки: <b>${p.margin_usd}$ × ${p.leverage}</b> =
+      ${n(p.margin_usd) * n(p.leverage)}$ · одновременно до
+      <b>${p.max_open_positions}</b> позиций · комиссия тейкера
+      <b>${(n(p.taker_fee) * 100).toFixed(3)}%</b> в одну сторону<br>
+    Посчитано: <b>${esc(report.generated)}</b> за ${p.elapsed_sec} с,
+      ${report.requests} запросов к бирже, кэш истории ${mb(report.cache_bytes)}
+    ${report.trades_truncated ? `<br>В списке сделок показаны свежие; ещё
+      ${report.trades_truncated} не поместились (итоги месяцев считаются по всем).` : ""}`;
+}
+
+function renderHistory() {
+  if (view !== "history") return;
+  const id = currentId();
+  const d = bt[id] || {};
+  const report = d.report;
+  const status = d.status || {};
+
+  const statusBox = document.getElementById("btStatus");
+  const runBtn = document.getElementById("btRun");
+  if (d.loading) {
+    statusBox.textContent = "загружаю отчёт…";
+  } else if (status.running) {
+    const p = status.progress || {};
+    const where = p.total ? `${p.done}/${p.total}` : "";
+    statusBox.textContent = `идёт прогон: ${esc(p.note || p.stage || "")} ${where} ` +
+      `· ${p.requests || 0} запросов · ${status.elapsed_sec || 0} с`;
+  } else if (d.error) {
+    statusBox.textContent = "бот недоступен: " + d.error;
+  } else if (status.error) {
+    statusBox.textContent = "прошлый прогон упал: " + status.error;
+  } else if (report) {
+    statusBox.textContent = `отчёт от ${report.generated}`;
+  } else {
+    statusBox.textContent = "прогона ещё не было";
+  }
+  runBtn.disabled = Boolean(status.running);
+  runBtn.textContent = status.running ? "считается…" : "Пересчитать";
+
+  renderBtNote(report, id);
+  document.getElementById("btBarsLegend").textContent =
+    report && report.fidelity === "none"
+      ? "Серый столбик — изменение цены биткоина за месяц. Результата ТС здесь нет: " +
+        "проверить её на истории нечем."
+      : "Цветной столбик — результат ТС за месяц в долларах, серый — изменение цены " +
+        "биткоина за тот же месяц в процентах. Шкалы у них свои: сравнивать надо " +
+        "знаки и форму, а не высоту.";
+  renderBtCards(report);
+  renderBtBars((report && report.months) || [], Boolean(report) && report.fidelity === "none");
+  renderBtMonths(report);
+  renderBtParams(report);
+}
+
 // ---- статус и цикл обновления ----------------------------------------------
 
 function setStatus(kind, text) {
@@ -732,6 +1140,9 @@ function renderActive() {
     `${bot(active).name} · v${versionOf(active)}`;
   renderCards(d.state, d.trades);
   renderCurve(d.trades);
+  // Вкладка истории живёт своим циклом (отчёт меняется только после
+  // пересчёта), но при смене бота её надо перерисовать под новый.
+  if (view === "history") loadBacktest(currentId());
   renderPending(d.state);
   renderOpen(d.state);
   renderTrades();
@@ -790,6 +1201,9 @@ pauseBtn.addEventListener("click", () => {
 });
 
 renderBots();
+// Восстанавливаем выбранную вкладку: switchView сам покажет нужный блок и,
+// если это история, подтянет отчёт.
+if (view === "history") { view = "live"; switchView("history"); }
 refresh();
 </script>
 </body>

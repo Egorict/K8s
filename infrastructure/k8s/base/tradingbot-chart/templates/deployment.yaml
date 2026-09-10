@@ -64,6 +64,14 @@ spec:
               value: {{ .strategy | quote }}
             - name: BOT_VERSION
               value: {{ .version | default "" | quote }}
+            # Умолчания вкладки «История по месяцам» (bot/backtest.py).
+            # Сам по себе прогон не запускается: его дёргают кнопкой в панели
+            # или `python run.py backtest`. Эти значения — только то, что
+            # подставится в форму запуска.
+            - name: BOT_BACKTEST_MONTHS
+              value: {{ $.Values.backtest.months | quote }}
+            - name: BOT_BACKTEST_SYMBOLS
+              value: {{ $.Values.backtest.symbols | quote }}
           ports:
             - name: http
               containerPort: {{ $.Values.service.port }}

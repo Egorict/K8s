@@ -7,8 +7,15 @@
     data/trades.csv    -> GET /api/trades   (закрытые сделки)
     data/signals.csv   -> GET /api/signals  (сработавшие сетапы)
     data/bot.log       -> GET /api/log      (хвост лога)
+    data/backtest.json -> GET /api/backtest (прогон ТС по истории, помесячно)
                           GET /            (страница, которая всё это рисует)
                           GET /healthz     (проба для Kubernetes)
+
+Бэктест (bot/backtest.py) считается не при каждом запросе, а по команде:
+POST /api/backtest/run запускает прогон фоновой задачей, GET /api/backtest/status
+показывает, где он сейчас, а результат ложится в data/backtest.json и живёт там
+до следующего пересчёта. Иначе панель дёргала бы многочасовую работу каждые
+пять секунд.
 """
 from __future__ import annotations
 
@@ -19,6 +26,10 @@ import logging
 import math
 import os
 from typing import Dict, List
+
+import asyncio
+import time
+from typing import Optional
 
 from aiohttp import web
 
@@ -67,8 +78,72 @@ def _tail(path: str, lines: int) -> List[str]:
         return [l.rstrip("\n") for l in fh.readlines()[-lines:]]
 
 
+class BacktestRunner:
+    """Фоновый прогон ТС по истории. Один на процесс, не больше одного зараз.
+
+    Держит собственное соединение с биржей: прогон качает историю страницами
+    и живёт минутами, и мешать его в клиент торгового цикла не стоит - тот
+    ограничен восемью запросами в секунду на всех.
+    """
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.task: Optional[asyncio.Task] = None
+        self.progress: Dict = {"stage": "idle"}
+        self.error: str = ""
+        self.started_at: float = 0.0
+
+    @property
+    def running(self) -> bool:
+        return self.task is not None and not self.task.done()
+
+    def status(self) -> Dict:
+        return {
+            "running": self.running,
+            "progress": self.progress,
+            "error": self.error,
+            "elapsed_sec": round(time.monotonic() - self.started_at, 1) if self.started_at else 0.0,
+            "has_result": os.path.exists(self.cfg.backtest_json),
+        }
+
+    def start(self, months: int, max_symbols: int) -> bool:
+        if self.running:
+            return False
+        self.error = ""
+        self.started_at = time.monotonic()
+        self.progress = {"stage": "start"}
+        self.task = asyncio.create_task(self._run(months, max_symbols), name="backtest")
+        return True
+
+    async def _run(self, months: int, max_symbols: int) -> None:
+        from .backtest import BacktestParams, run_backtest
+        from .exchange import BybitPublic
+
+        params = BacktestParams(months=months, max_symbols=max_symbols)
+        try:
+            async with BybitPublic(category=self.cfg.category) as client:
+                report = await run_backtest(
+                    self.cfg, client, params, self.cfg.history_dir,
+                    progress=lambda p: self.progress.update(p),
+                )
+            tmp = self.cfg.backtest_json + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(_finite(report), fh, ensure_ascii=False, allow_nan=False)
+            os.replace(tmp, self.cfg.backtest_json)
+            self.progress = {"stage": "done", "note": f"{report['total']['trades']} сделок"}
+        except asyncio.CancelledError:
+            self.progress = {"stage": "cancelled"}
+            raise
+        except Exception as exc:  # noqa: BLE001 - показываем причину в панели
+            log.exception("Бэктест упал: %s", exc)
+            self.error = str(exc)
+            self.progress = {"stage": "failed"}
+
+
 def build_app(cfg: Config) -> web.Application:
     app = web.Application()
+    runner = BacktestRunner(cfg)
+    app["backtest"] = runner
 
     async def index(_request: web.Request) -> web.Response:
         return web.Response(text=DASHBOARD_HTML, content_type="text/html", charset="utf-8")
@@ -100,6 +175,21 @@ def build_app(cfg: Config) -> web.Application:
             "Content-Disposition": 'attachment; filename="trades.csv"'
         })
 
+    async def api_backtest(_request: web.Request) -> web.Response:
+        """Последний посчитанный отчёт. Пустой объект - ещё не считали."""
+        return web.json_response(_read_json(cfg.backtest_json), dumps=_safe_dumps)
+
+    async def api_backtest_status(_request: web.Request) -> web.Response:
+        return web.json_response(runner.status(), dumps=_safe_dumps)
+
+    async def api_backtest_run(request: web.Request) -> web.Response:
+        months = min(max(int(request.query.get("months", cfg.backtest_months)), 1), 24)
+        symbols = min(max(int(request.query.get("symbols", cfg.backtest_symbols)), 0), 600)
+        if not runner.start(months, symbols):
+            return web.json_response({"started": False, "reason": "прогон уже идёт",
+                                      **runner.status()}, dumps=_safe_dumps)
+        return web.json_response({"started": True, **runner.status()}, dumps=_safe_dumps)
+
     async def healthz(_request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "mode": cfg.mode})
 
@@ -109,6 +199,12 @@ def build_app(cfg: Config) -> web.Application:
         web.get("/api/trades", api_trades),
         web.get("/api/signals", api_signals),
         web.get("/api/log", api_log),
+        web.get("/api/backtest", api_backtest),
+        web.get("/api/backtest/status", api_backtest_status),
+        # И GET, и POST: панель шлёт POST, а руками удобнее дёрнуть из адресной
+        # строки браузера - там только GET.
+        web.get("/api/backtest/run", api_backtest_run),
+        web.post("/api/backtest/run", api_backtest_run),
         web.get("/trades.csv", api_trades_csv),
         web.get("/healthz", healthz),
     ])
